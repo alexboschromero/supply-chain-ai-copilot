@@ -665,7 +665,7 @@ td{{padding:10px;border-bottom:1px solid var(--line);vertical-align:top}}
 <div class="header">
 <h1>{html_lib.escape(title)}</h1>
 <p>{html_lib.escape(subtitle)}</p>
-<div class="meta">Generated {generated} · Supply Chain AI Copilot V2.0</div>
+<div class="meta">Generated {generated} · Supply Chain AI Copilot V2.0.1</div>
 </div>
 {body}
 <div class="footer">Decision support only. Validate purchase execution and supplier commitments before release.</div>
@@ -2344,7 +2344,7 @@ a["Forecast_Change_Pct"] = np.where(
 # Header
 # -----------------------------
 st.title("📦 Supply Chain AI Copilot")
-st.caption("From raw supply-chain data to prioritized decisions · V2.0")
+st.caption("From raw supply-chain data to prioritized decisions · V2.0.1")
 
 c1,c2,c3,c4,c5,c6 = st.columns(6)
 c1.metric("SKUs", K["sku"])
@@ -2459,7 +2459,8 @@ with tabs[1]:
             build_planning_agent_html(planning, planning_meta).encode("utf-8"),
             "planning_agent_report.html",
             "text/html",
-            use_container_width=True
+            use_container_width=True,
+                key="planning_agent_html_tab"
         )
     with e2:
         try:
@@ -2473,7 +2474,8 @@ with tabs[1]:
                 planning_xlsx,
                 "planning_agent_report.xlsx",
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True
+                use_container_width=True,
+                key="planning_agent_excel_tab"
             )
 
 # -----------------------------
@@ -2895,7 +2897,8 @@ with tabs[11]:
             build_planning_agent_html(planning, planning_meta).encode("utf-8"),
             "planning_agent_report.html",
             "text/html",
-            use_container_width=True
+            use_container_width=True,
+                key="planning_agent_html_export"
         )
     with pe2:
         try:
@@ -2909,7 +2912,8 @@ with tabs[11]:
                 planning_export_xlsx,
                 "planning_agent_report.xlsx",
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True
+                use_container_width=True,
+                key="planning_agent_excel_export"
             )
 
     st.markdown("### 5. Complete Management Pack")
