@@ -15,10 +15,9 @@ except Exception:
     RateLimitError = Exception
 
 try:
-    from artifact_tool import Workbook, SpreadsheetFile
+    import xlsxwriter
 except Exception:
-    Workbook = None
-    SpreadsheetFile = None
+    xlsxwriter = None
 
 st.set_page_config(
     page_title="Supply Chain AI Copilot",
@@ -329,7 +328,7 @@ td{{padding:10px;border-bottom:1px solid var(--line);vertical-align:top}}
 <div class="header">
 <h1>{html_lib.escape(title)}</h1>
 <p>{html_lib.escape(subtitle)}</p>
-<div class="meta">Generated {generated} · Supply Chain AI Copilot V1.8</div>
+<div class="meta">Generated {generated} · Supply Chain AI Copilot V1.8.1</div>
 </div>
 {body}
 <div class="footer">Decision support only. Validate purchase execution and supplier commitments before release.</div>
@@ -523,171 +522,241 @@ def build_management_pack(a, raw, dq, plan):
     return buf.getvalue(), reports
 
 
-def _xl_clean(v):
+
+def _xlsx_safe(v):
     if pd.isna(v):
-        return None
-    if isinstance(v, (np.integer,)):
-        return int(v)
-    if isinstance(v, (np.floating,)):
-        return float(v)
+        return ""
+    if hasattr(v, "item"):
+        try:
+            return v.item()
+        except Exception:
+            pass
     return v
 
-def _xl_rows(df, columns):
-    return [[_xl_clean(v) for v in row] for row in df[columns].itertuples(index=False, name=None)]
+def _xlsx_write_df(ws, df, start_row, start_col, columns, workbook,
+                    table_name, formats=None, widths=None, number_formats=None):
+    formats = formats or {}
+    widths = widths or {}
+    number_formats = number_formats or {}
 
-def _xl_title(sheet, title, subtitle, last_col="L"):
-    sheet.merge_cells(f"A1:{last_col}1")
-    sheet.get_range("A1").values = [[title]]
-    sheet.get_range(f"A1:{last_col}1").format = {
-        "fill": "#17365D",
-        "font": {"bold": True, "color": "#FFFFFF", "size": 16},
-        "vertical_alignment": "center",
+    header_fmt = formats.get(
+        "header",
+        workbook.add_format({
+            "bold": True, "font_color": "#FFFFFF", "bg_color": "#17365D",
+            "border": 0, "align": "center", "valign": "vcenter", "text_wrap": True
+        })
+    )
+    body_fmt = formats.get(
+        "body",
+        workbook.add_format({"border": 0, "valign": "top", "text_wrap": True})
+    )
+
+    for j, col in enumerate(columns):
+        ws.write(start_row, start_col + j, col, header_fmt)
+
+    for i, row in enumerate(df[columns].itertuples(index=False, name=None), start=1):
+        for j, val in enumerate(row):
+            col_name = columns[j]
+            fmt = body_fmt
+            if col_name in number_formats:
+                fmt = formats.get(col_name) or workbook.add_format({
+                    "num_format": number_formats[col_name],
+                    "valign": "top",
+                    "text_wrap": True
+                })
+            ws.write(start_row + i, start_col + j, _xlsx_safe(val), fmt)
+
+    end_row = start_row + len(df)
+    end_col = start_col + len(columns) - 1
+    if len(df) > 0:
+        ws.add_table(start_row, start_col, end_row, end_col, {
+            "name": table_name,
+            "style": "Table Style Medium 2",
+            "columns": [{"header": c} for c in columns],
+        })
+
+    for j, col in enumerate(columns):
+        width = widths.get(col, 16)
+        if col in {"Description", "Reason", "Details"}:
+            width = max(width, 30)
+        if col in {"Action", "Supplier", "SKU"}:
+            width = max(width, 18)
+        ws.set_column(start_col + j, start_col + j, width)
+
+    ws.freeze_panes(start_row + 1, start_col)
+    return start_row, start_col, end_row, end_col
+
+def _xlsx_title(ws, title, subtitle, workbook, last_col=11):
+    title_fmt = workbook.add_format({
+        "bold": True, "font_size": 18, "font_color": "#FFFFFF",
+        "bg_color": "#17365D", "valign": "vcenter"
+    })
+    subtitle_fmt = workbook.add_format({
+        "italic": True, "font_color": "#64748B", "text_wrap": True
+    })
+    ws.merge_range(0, 0, 0, last_col, title, title_fmt)
+    ws.merge_range(1, 0, 1, last_col, subtitle, subtitle_fmt)
+    ws.set_row(0, 28)
+    ws.set_row(1, 28)
+
+def _xlsx_kpi_block(ws, workbook, row, col, width, label, value, fill):
+    label_fmt = workbook.add_format({
+        "bold": True, "font_color": "#334155", "bg_color": fill,
+        "align": "center", "valign": "vcenter", "text_wrap": True
+    })
+    value_fmt = workbook.add_format({
+        "bold": True, "font_size": 16, "font_color": "#0F172A",
+        "bg_color": fill, "align": "center", "valign": "vcenter",
+        "text_wrap": True
+    })
+    ws.merge_range(row, col, row, col + width - 1, label, label_fmt)
+    ws.merge_range(row + 1, col, row + 2, col + width - 1, value, value_fmt)
+
+def _xlsx_base_formats(workbook):
+    return {
+        "header": workbook.add_format({
+            "bold": True, "font_color": "#FFFFFF", "bg_color": "#17365D",
+            "align": "center", "valign": "vcenter", "text_wrap": True
+        }),
+        "body": workbook.add_format({"valign": "top", "text_wrap": True}),
+        "currency": workbook.add_format({"num_format": '€#,##0', "valign": "top"}),
+        "number": workbook.add_format({"num_format": '#,##0.0', "valign": "top"}),
+        "integer": workbook.add_format({"num_format": '#,##0', "valign": "top"}),
     }
-    sheet.get_range("A2").values = [[subtitle]]
-    sheet.get_range(f"A2:{last_col}2").format = {
-        "font": {"italic": True, "color": "#64748B"},
-        "wrap_text": True,
-    }
 
-def _xl_table(sheet, row, col, df, columns, name, currency_cols=None, number_cols=None):
-    values = [columns] + _xl_rows(df, columns)
-    rng = sheet.get_range_by_indexes(row, col, len(values), len(columns))
-    rng.values = values
-    header = sheet.get_range_by_indexes(row, col, 1, len(columns))
-    header.format = {
-        "fill": "#17365D",
-        "font": {"bold": True, "color": "#FFFFFF"},
-        "horizontal_alignment": "center",
-        "vertical_alignment": "center",
-        "wrap_text": True,
-    }
-    rng.format.wrap_text = True
-    sheet.tables.add(rng, True, name)
+def _xlsx_apply_basic_conditional_formats(ws, row0, row1, col0, col1, columns, workbook):
+    # Status / action visual cues.
+    if "Status" in columns:
+        idx = columns.index("Status")
+        rng = f"{xlsxwriter.utility.xl_col_to_name(col0+idx)}{row0+2}:{xlsxwriter.utility.xl_col_to_name(col0+idx)}{row1+1}"
+        ws.conditional_format(rng, {"type": "text", "criteria": "containing", "value": "CRITICAL",
+                                    "format": {"bg_color": "#FEE2E2", "font_color": "#991B1B"}})
+        ws.conditional_format(rng, {"type": "text", "criteria": "containing", "value": "EXCESS",
+                                    "format": {"bg_color": "#FEF3C7", "font_color": "#92400E"}})
 
-    currency_cols = set(currency_cols or [])
-    number_cols = set(number_cols or [])
-    for j, c in enumerate(columns):
-        cr = sheet.get_range_by_indexes(row + 1, col + j, max(1, len(values)-1), 1)
-        if c in currency_cols:
-            cr.format.number_format = '€#,##0'
-        elif c in number_cols:
-            cr.format.number_format = '#,##0.0'
-        width = 16
-        if c in {"Description","Reason","Details","Action"}: width = 30
-        if c in {"Supplier","SKU","Owner","Deadline","Status","Confidence"}: width = 18
-        cr.format.column_width = width
-    return rng
+def _xlsx_write_section_chart(ws, workbook, chart_type, title, categories_col, values_col, first_row, last_row, start_cell):
+    if last_row < first_row:
+        return
+    chart = workbook.add_chart({"type": chart_type})
+    sheet_ref = ws.name.replace("'", "''")
+    categories = f"='{sheet_ref}'!${xlsxwriter.utility.xl_col_to_name(categories_col)}${first_row+1}:${xlsxwriter.utility.xl_col_to_name(categories_col)}${last_row+1}"
+    values = f"='{sheet_ref}'!${xlsxwriter.utility.xl_col_to_name(values_col)}${first_row+1}:${xlsxwriter.utility.xl_col_to_name(values_col)}${last_row+1}"
+    chart.add_series({
+        "name": title,
+        "categories": categories,
+        "values": values,
+    })
+    chart.set_title({"name": title})
+    chart.set_style(10)
+    chart.set_legend({"none": True})
+    ws.insert_chart(start_cell, chart, {"x_scale": 1.05, "y_scale": 0.9})
 
-def _xl_kpis(sheet, metrics):
-    # metrics: list of (label, value, fill)
-    positions = ["A4:C6","D4:F6","G4:I6","J4:L6"]
-    for (label, value, fill), pos in zip(metrics, positions):
-        sheet.merge_cells(pos)
-        tl = pos.split(":")[0]
-        sheet.get_range(tl).values = [[f"{label}\n{value}"]]
-        sheet.get_range(pos).format = {
-            "fill": fill,
-            "font": {"bold": True, "color": "#0F172A", "size": 16},
-            "horizontal_alignment": "center",
-            "vertical_alignment": "center",
-            "wrap_text": True,
-        }
+def _xlsx_build_executive(a, raw, dq, plan):
+    buf = io.BytesIO()
+    wb = xlsxwriter.Workbook(buf, {"in_memory": True})
+    fmt = _xlsx_base_formats(wb)
 
-def _xl_exec(a, raw, dq, plan):
-    wb = Workbook.create()
-    sh = wb.worksheets.add("Executive")
-    _xl_title(sh, "Supply Chain AI — Executive Report",
-              "Dashboard view mirroring the Executive HTML report.", "L")
-    _xl_kpis(sh, [
-        ("Inventory value", f"€{a['Inventory_Value'].sum():,.0f}", "#EAF2FF"),
-        ("Purchase requirement", f"€{a['Purchase_Value'].sum():,.0f}", "#ECFDF5"),
-        ("Service risk", f"€{a['Service_Risk_Value'].sum():,.0f}", "#FEF2F2"),
-        ("Excess exposure", f"€{a['Excess_Inventory_Value'].sum():,.0f}", "#FFF7ED"),
-    ])
+    ws = wb.add_worksheet("Executive")
+    _xlsx_title(ws, "Supply Chain AI — Executive Report",
+                "Dashboard view mirroring the Executive HTML report.", wb, 11)
+
+    _xlsx_kpi_block(ws, wb, 3, 0, 3, "Inventory value", f"€{a['Inventory_Value'].sum():,.0f}", "#EAF2FF")
+    _xlsx_kpi_block(ws, wb, 3, 3, 3, "Purchase requirement", f"€{a['Purchase_Value'].sum():,.0f}", "#ECFDF5")
+    _xlsx_kpi_block(ws, wb, 3, 6, 3, "Service risk", f"€{a['Service_Risk_Value'].sum():,.0f}", "#FEF2F2")
+    _xlsx_kpi_block(ws, wb, 3, 9, 3, "Excess exposure", f"€{a['Excess_Inventory_Value'].sum():,.0f}", "#FFF7ED")
+
     top = a.sort_values("Decision_Score", ascending=False).head(10)
-    _xl_table(sh, 8, 0, top,
-              ["SKU","Description","Supplier","Status","Action","Action_Timing",
-               "Recommended_Order","Purchase_Value","Days_Cover","Lead_Time_Days"],
-              "ExcelExecutivePriorities",
-              currency_cols=["Purchase_Value"],
-              number_cols=["Recommended_Order","Days_Cover","Lead_Time_Days"])
-    sup = a.groupby("Supplier", as_index=False).agg(
+    cols = ["SKU","Description","Supplier","Status","Action","Action_Timing",
+            "Recommended_Order","Purchase_Value","Days_Cover","Lead_Time_Days"]
+    row0 = 8
+    _xlsx_write_df(
+        ws, top, row0, 0, cols, wb, "ExecutivePriorities",
+        formats={**fmt, "Purchase_Value": fmt["currency"], "Recommended_Order": fmt["integer"],
+                 "Days_Cover": fmt["number"], "Lead_Time_Days": fmt["number"]},
+        widths={"Description": 30, "Purchase_Value": 17, "Action": 18}
+    )
+
+    supplier = a.groupby("Supplier", as_index=False).agg(
         Critical=("Status", lambda s: int((s=="🔴 CRITICAL").sum())),
         Service_Risk=("Service_Risk_Value","sum"),
         Purchase_Value=("Purchase_Value","sum"),
         Inventory=("Inventory_Value","sum"),
     ).sort_values(["Critical","Service_Risk","Purchase_Value"], ascending=[False,False,False])
-    _xl_table(sh, 22, 0, sup, ["Supplier","Critical","Service_Risk","Purchase_Value","Inventory"],
-              "ExcelExecutiveSuppliers",
-              currency_cols=["Service_Risk","Purchase_Value","Inventory"])
-    try:
-        ch = sh.charts.add("bar", sh.get_range(f"A23:E{22+min(len(sup),10)}"))
-        ch.title_text = "Supplier Exposure"
-        ch.set_position("H22","L38")
-    except Exception:
-        pass
-    sh.freeze_panes.freeze_rows(8)
+    sup_row = row0 + len(top) + 3
+    _xlsx_write_df(
+        ws, supplier, sup_row, 0,
+        ["Supplier","Critical","Service_Risk","Purchase_Value","Inventory"],
+        wb, "ExecutiveSupplierExposure",
+        formats={**fmt, "Service_Risk": fmt["currency"], "Purchase_Value": fmt["currency"], "Inventory": fmt["currency"]},
+        widths={"Supplier": 22}
+    )
+    _xlsx_write_section_chart(ws, wb, "column", "Supplier purchase exposure", 0, 3,
+                              sup_row + 1, sup_row + min(len(supplier), 10), "H22")
 
-    act = wb.worksheets.add("Action Plan")
-    _xl_title(act, "Weekly Action Plan", "Same planner-ready information as the HTML action plan.", "J")
-    _xl_table(act, 3, 0, plan,
-              ["Priority","SKU","Description","Supplier","Action","Owner","Deadline","Reason","Confidence","Purchase_Value"],
-              "ExcelExecutiveActionPlan", currency_cols=["Purchase_Value"])
-    act.freeze_panes.freeze_rows(4)
+    action_ws = wb.add_worksheet("Action Plan")
+    _xlsx_title(action_ws, "Weekly Action Plan", "Planner-ready worklist.", wb, 9)
+    _xlsx_write_df(
+        action_ws, plan, 3, 0,
+        ["Priority","SKU","Description","Supplier","Action","Owner","Deadline","Reason","Confidence","Purchase_Value"],
+        wb, "ExecutiveActionPlan",
+        formats={**fmt, "Purchase_Value": fmt["currency"]},
+        widths={"Description": 30, "Reason": 34}
+    )
 
-    dqsh = wb.worksheets.add("Data Quality")
-    _xl_title(dqsh, "Data Quality", "Same checks as the visual data-quality report.", "E")
-    _xl_table(dqsh, 3, 0, dq, ["Category","Check","Status","Count","Details"],
-              "ExcelExecutiveDQ")
-    dqsh.freeze_panes.freeze_rows(4)
+    dq_ws = wb.add_worksheet("Data Quality")
+    _xlsx_title(dq_ws, "Data Quality", "Structural and consistency checks.", wb, 4)
+    _xlsx_write_df(dq_ws, dq, 3, 0, ["Category","Check","Status","Count","Details"], wb, "ExecutiveDataQuality",
+                   widths={"Check": 30, "Details": 42})
     return wb
 
-def _xl_detailed(a, raw, dq, plan):
-    wb = Workbook.create()
+def _xlsx_build_detailed(a, raw, dq, plan):
+    buf = io.BytesIO()
+    wb = xlsxwriter.Workbook(buf, {"in_memory": True})
+    fmt = _xlsx_base_formats(wb)
 
-    inv = wb.worksheets.add("Inventory Risk")
-    _xl_title(inv, "Inventory & Service Risk", "Excess inventory and service-risk exposure.", "K")
+    inv = wb.add_worksheet("Inventory Risk")
+    _xlsx_title(inv, "Inventory & Service Risk", "Excess inventory and service-risk exposure.", wb, 10)
     x = a.sort_values("Excess_Inventory_Value", ascending=False).head(20)
-    _xl_table(inv, 3, 0, x,
-              ["SKU","Description","Supplier","Status","Days_Cover","Lead_Time_Days",
-               "Stock","Open_PO","Excess_Inventory_Qty","Excess_Inventory_Value","Service_Risk_Value"],
-              "ExcelInventoryRisk",
-              currency_cols=["Excess_Inventory_Value","Service_Risk_Value"],
-              number_cols=["Days_Cover","Lead_Time_Days","Stock","Open_PO","Excess_Inventory_Qty"])
-    try:
-        ch = inv.charts.add("bar", inv.get_range("A4:F13"))
-        ch.title_text = "Inventory Risk by SKU"
-        ch.set_position("M4","R20")
-    except Exception:
-        pass
-    inv.freeze_panes.freeze_rows(4)
+    row0 = 3
+    _xlsx_write_df(
+        inv, x, row0, 0,
+        ["SKU","Description","Supplier","Status","Days_Cover","Lead_Time_Days",
+         "Stock","Open_PO","Excess_Inventory_Qty","Excess_Inventory_Value","Service_Risk_Value"],
+        wb, "InventoryRisk",
+        formats={**fmt, "Excess_Inventory_Value": fmt["currency"], "Service_Risk_Value": fmt["currency"]},
+        widths={"Description": 30}
+    )
+    _xlsx_write_section_chart(inv, wb, "bar", "Excess inventory value", 0, 9,
+                              row0 + 1, row0 + min(len(x), 10), "M4")
 
-    pur = wb.worksheets.add("Purchase Plan")
-    _xl_title(pur, "Purchase Plan", "Recommended replenishment by SKU and supplier.", "K")
+    pur = wb.add_worksheet("Purchase Plan")
+    _xlsx_title(pur, "Purchase Plan", "Recommended replenishment by SKU and supplier.", wb, 10)
     x = a[a["Recommended_Order"] > 0].sort_values("Purchase_Value", ascending=False)
-    _xl_table(pur, 3, 0, x,
-              ["SKU","Description","Supplier","Action","Recommended_Order","Unit_Cost","Purchase_Value",
-               "Days_Cover","Lead_Time_Days","Open_PO","PO_Adequacy"],
-              "ExcelPurchasePlan",
-              currency_cols=["Unit_Cost","Purchase_Value"],
-              number_cols=["Recommended_Order","Days_Cover","Lead_Time_Days","Open_PO"])
-    try:
-        ch = pur.charts.add("bar", pur.get_range("A4:G13"))
-        ch.title_text = "Purchase Exposure"
-        ch.set_position("M4","R20")
-    except Exception:
-        pass
-    pur.freeze_panes.freeze_rows(4)
+    row0 = 3
+    _xlsx_write_df(
+        pur, x, row0, 0,
+        ["SKU","Description","Supplier","Action","Recommended_Order","Unit_Cost","Purchase_Value",
+         "Days_Cover","Lead_Time_Days","Open_PO","PO_Adequacy"],
+        wb, "PurchasePlan",
+        formats={**fmt, "Unit_Cost": fmt["currency"], "Purchase_Value": fmt["currency"],
+                 "Recommended_Order": fmt["integer"], "Open_PO": fmt["integer"]},
+        widths={"Description": 30, "PO_Adequacy": 16}
+    )
+    _xlsx_write_section_chart(pur, wb, "column", "Purchase value by SKU", 0, 6,
+                              row0 + 1, row0 + min(len(x), 10), "M4")
 
-    act = wb.worksheets.add("Action Plan")
-    _xl_title(act, "Weekly Action Plan", "Owner, timing, reason and confidence.", "J")
-    _xl_table(act, 3, 0, plan,
-              ["Priority","SKU","Description","Supplier","Action","Owner","Deadline","Reason","Confidence","Purchase_Value"],
-              "ExcelDetailedActionPlan", currency_cols=["Purchase_Value"])
-    act.freeze_panes.freeze_rows(4)
+    act = wb.add_worksheet("Action Plan")
+    _xlsx_title(act, "Weekly Action Plan", "Owner, timing, reason and confidence.", wb, 9)
+    _xlsx_write_df(
+        act, plan, 3, 0,
+        ["Priority","SKU","Description","Supplier","Action","Owner","Deadline","Reason","Confidence","Purchase_Value"],
+        wb, "DetailedActionPlan",
+        formats={**fmt, "Purchase_Value": fmt["currency"]},
+        widths={"Description": 30, "Reason": 34}
+    )
 
-    sup = wb.worksheets.add("Supplier Risk")
-    _xl_title(sup, "Supplier Risk", "Risk concentration and economic exposure.", "J")
+    sup = wb.add_worksheet("Supplier Risk")
+    _xlsx_title(sup, "Supplier Risk", "Risk concentration and economic exposure.", wb, 8)
     s = a.groupby("Supplier", as_index=False).agg(
         SKUs=("SKU","count"),
         Critical=("Status", lambda z: int((z=="🔴 CRITICAL").sum())),
@@ -699,53 +768,212 @@ def _xl_detailed(a, raw, dq, plan):
     )
     s["Supplier_Risk_Score"] = s["Critical"]*100 + s["Review"]*40 + np.log1p(s["Service_Risk_Value"])*5 + np.log1p(s["Purchase_Value"])*2
     s = s.sort_values("Supplier_Risk_Score", ascending=False)
-    _xl_table(sup, 3, 0, s,
-              ["Supplier","SKUs","Critical","Review","Supplier_Risk_Score","Service_Risk_Value",
-               "Purchase_Value","Inventory_Value","Excess_Inventory_Value"],
-              "ExcelSupplierRisk",
-              currency_cols=["Service_Risk_Value","Purchase_Value","Inventory_Value","Excess_Inventory_Value"],
-              number_cols=["SKUs","Critical","Review","Supplier_Risk_Score"])
-    try:
-        ch = sup.charts.add("bar", sup.get_range(f"A4:E{min(4+len(s),13)}"))
-        ch.title_text = "Supplier Risk Score"
-        ch.set_position("K4","Q20")
-    except Exception:
-        pass
-    sup.freeze_panes.freeze_rows(4)
+    row0 = 3
+    _xlsx_write_df(
+        sup, s, row0, 0,
+        ["Supplier","SKUs","Critical","Review","Supplier_Risk_Score","Service_Risk_Value",
+         "Purchase_Value","Inventory_Value","Excess_Inventory_Value"],
+        wb, "SupplierRisk",
+        formats={**fmt, "Service_Risk_Value": fmt["currency"], "Purchase_Value": fmt["currency"],
+                 "Inventory_Value": fmt["currency"], "Excess_Inventory_Value": fmt["currency"],
+                 "Supplier_Risk_Score": fmt["number"]},
+        widths={"Supplier": 22}
+    )
+    _xlsx_write_section_chart(sup, wb, "column", "Supplier risk score", 0, 4,
+                              row0 + 1, row0 + min(len(s), 10), "K4")
 
-    dqs = wb.worksheets.add("Data Quality")
-    _xl_title(dqs, "Data Quality", "Severity and counts for the current dataset.", "E")
-    _xl_table(dqs, 3, 0, dq, ["Category","Check","Status","Count","Details"], "ExcelDetailedDQ")
-    dqs.freeze_panes.freeze_rows(4)
+    dq_ws = wb.add_worksheet("Data Quality")
+    _xlsx_title(dq_ws, "Data Quality", "Severity and counts for the current dataset.", wb, 4)
+    _xlsx_write_df(dq_ws, dq, 3, 0, ["Category","Check","Status","Count","Details"], wb, "DetailedDataQuality",
+                   widths={"Check": 30, "Details": 42})
     return wb
 
-def _xl_complete(a, raw, dq, plan):
-    wb = _xl_detailed(a, raw, dq, plan)
-    ex = wb.worksheets.add("Executive")
-    _xl_title(ex, "Supply Chain AI — Complete Management Pack",
-              "Executive view plus the same detailed report information available in the HTML pack.", "L")
-    _xl_kpis(ex, [
-        ("Inventory value", f"€{a['Inventory_Value'].sum():,.0f}", "#EAF2FF"),
-        ("Purchase requirement", f"€{a['Purchase_Value'].sum():,.0f}", "#ECFDF5"),
-        ("Service risk", f"€{a['Service_Risk_Value'].sum():,.0f}", "#FEF2F2"),
-        ("Excess exposure", f"€{a['Excess_Inventory_Value'].sum():,.0f}", "#FFF7ED"),
-    ])
+def _xlsx_build_complete(a, raw, dq, plan):
+    wb = _xlsx_build_detailed(a, raw, dq, plan)
+
+    # Complete pack adds Executive + Source Data to the detailed workbook.
+    ex = wb.add_worksheet("Executive")
+    _xlsx_title(ex, "Supply Chain AI — Complete Management Pack",
+                "Executive dashboard for the full workbook.", wb, 11)
+    _xlsx_kpi_block(ex, wb, 3, 0, 3, "Inventory value", f"€{a['Inventory_Value'].sum():,.0f}", "#EAF2FF")
+    _xlsx_kpi_block(ex, wb, 3, 3, 3, "Purchase requirement", f"€{a['Purchase_Value'].sum():,.0f}", "#ECFDF5")
+    _xlsx_kpi_block(ex, wb, 3, 6, 3, "Service risk", f"€{a['Service_Risk_Value'].sum():,.0f}", "#FEF2F2")
+    _xlsx_kpi_block(ex, wb, 3, 9, 3, "Excess exposure", f"€{a['Excess_Inventory_Value'].sum():,.0f}", "#FFF7ED")
     top = a.sort_values("Decision_Score", ascending=False).head(10)
-    _xl_table(ex, 8, 0, top,
-              ["SKU","Description","Supplier","Status","Action","Action_Timing","Recommended_Order","Purchase_Value"],
-              "ExcelCompleteExec",
-              currency_cols=["Purchase_Value"], number_cols=["Recommended_Order"])
-    src = wb.worksheets.add("Source Data")
-    _xl_title(src, "Source Data", "Original normalized dataset used for the calculations.", "L")
-    _xl_table(src, 3, 0, raw, list(raw.columns), "ExcelSourceData")
-    src.freeze_panes.freeze_rows(4)
+    _xlsx_write_df(
+        ex, top, 8, 0,
+        ["SKU","Description","Supplier","Status","Action","Action_Timing","Recommended_Order","Purchase_Value"],
+        wb, "CompleteExecutivePriorities",
+        formats={**_xlsx_base_formats(wb), "Purchase_Value": wb.add_format({"num_format": '€#,##0'})},
+        widths={"Description": 30}
+    )
+
+    src_ws = wb.add_worksheet("Source Data")
+    _xlsx_title(src_ws, "Source Data", "Normalized source dataset used by the decision engine.", wb, max(5, len(raw.columns)-1))
+    _xlsx_write_df(src_ws, raw, 3, 0, list(raw.columns), wb, "SourceData")
+
     return wb
 
 def _excel_export_bytes(kind, a, raw, dq, plan):
-    if Workbook is None or SpreadsheetFile is None:
-        raise RuntimeError("artifact_tool is not available. Add artifact_tool to requirements.txt and redeploy.")
-    wb = {"executive": _xl_exec, "detailed": _xl_detailed, "complete": _xl_complete}[kind](a, raw, dq, plan)
-    return SpreadsheetFile.export_xlsx(wb).data
+    if xlsxwriter is None:
+        raise RuntimeError("XlsxWriter is not available. Add XlsxWriter to requirements.txt and redeploy.")
+    wb = {"executive": _xlsx_build_executive, "detailed": _xlsx_build_detailed, "complete": _xlsx_build_complete}[kind](a, raw, dq, plan)
+    # Workbook is already in memory; close it by accessing its underlying
+    # buffer is not exposed, so rebuild using a helper that returns bytes.
+    # To keep this deterministic, generate through a common bytes wrapper below.
+    raise RuntimeError("Internal workbook wrapper not initialized.")
+
+def _excel_bytes(kind, a, raw, dq, plan):
+    if xlsxwriter is None:
+        raise RuntimeError("XlsxWriter is not available. Add XlsxWriter to requirements.txt and redeploy.")
+    # Build directly so workbook.close() flushes the BytesIO.
+    buf = io.BytesIO()
+    if kind == "executive":
+        _xlsx_rebuild = _xlsx_build_executive
+    elif kind == "detailed":
+        _xlsx_rebuild = _xlsx_build_detailed
+    else:
+        _xlsx_rebuild = _xlsx_build_complete
+
+    # Patch the builders to accept a file-like target by temporarily
+    # serializing sheet content is more complex; instead replicate by using
+    # xlsxwriter's constructor in these wrapper builders.
+    # The builders above need a stream. We'll use the deterministic builder
+    # below for all three.
+    return _xlsx_stream_build(kind, a, raw, dq, plan)
+
+def _xlsx_stream_build(kind, a, raw, dq, plan):
+    buf = io.BytesIO()
+    # Builders create workbook instances; to ensure close flushes to buf,
+    # we use a dedicated local writer around a precomputed workbook layout.
+    # Implement with temporary file-like workbook by dispatching the layout
+    # routines that accept workbook objects.
+    wb = xlsxwriter.Workbook(buf, {"in_memory": True})
+
+    if kind == "executive":
+        fmt = _xlsx_base_formats(wb)
+        ws = wb.add_worksheet("Executive")
+        _xlsx_title(ws, "Supply Chain AI — Executive Report", "Dashboard view mirroring the Executive HTML report.", wb, 11)
+        _xlsx_kpi_block(ws, wb, 3, 0, 3, "Inventory value", f"€{a['Inventory_Value'].sum():,.0f}", "#EAF2FF")
+        _xlsx_kpi_block(ws, wb, 3, 3, 3, "Purchase requirement", f"€{a['Purchase_Value'].sum():,.0f}", "#ECFDF5")
+        _xlsx_kpi_block(ws, wb, 3, 6, 3, "Service risk", f"€{a['Service_Risk_Value'].sum():,.0f}", "#FEF2F2")
+        _xlsx_kpi_block(ws, wb, 3, 9, 3, "Excess exposure", f"€{a['Excess_Inventory_Value'].sum():,.0f}", "#FFF7ED")
+        top = a.sort_values("Decision_Score", ascending=False).head(10)
+        _xlsx_write_df(ws, top, 8, 0,
+                       ["SKU","Description","Supplier","Status","Action","Action_Timing","Recommended_Order","Purchase_Value","Days_Cover","Lead_Time_Days"],
+                       "ExecPriorities", formats={**fmt, "Purchase_Value": fmt["currency"], "Recommended_Order": fmt["integer"], "Days_Cover": fmt["number"], "Lead_Time_Days": fmt["number"]},
+                       widths={"Description": 30})
+        action_ws = wb.add_worksheet("Action Plan")
+        _xlsx_title(action_ws, "Weekly Action Plan", "Planner-ready worklist.", wb, 9)
+        _xlsx_write_df(action_ws, plan, 3, 0,
+                       ["Priority","SKU","Description","Supplier","Action","Owner","Deadline","Reason","Confidence","Purchase_Value"],
+                       "ExecActionPlan", formats={**fmt, "Purchase_Value": fmt["currency"]}, widths={"Description":30,"Reason":34})
+        dq_ws = wb.add_worksheet("Data Quality")
+        _xlsx_title(dq_ws, "Data Quality", "Structural and consistency checks.", wb, 4)
+        _xlsx_write_df(dq_ws, dq, 3, 0, ["Category","Check","Status","Count","Details"], "ExecDQ", widths={"Check":30,"Details":42})
+
+    elif kind == "detailed":
+        fmt = _xlsx_base_formats(wb)
+        inv = wb.add_worksheet("Inventory Risk")
+        _xlsx_title(inv, "Inventory & Service Risk", "Excess inventory and service-risk exposure.", wb, 10)
+        x = a.sort_values("Excess_Inventory_Value", ascending=False).head(20)
+        _xlsx_write_df(inv, x, 3, 0,
+                       ["SKU","Description","Supplier","Status","Days_Cover","Lead_Time_Days","Stock","Open_PO","Excess_Inventory_Qty","Excess_Inventory_Value","Service_Risk_Value"],
+                       "InventoryRisk", formats={**fmt, "Excess_Inventory_Value": fmt["currency"], "Service_Risk_Value": fmt["currency"]}, widths={"Description":30})
+        _xlsx_write_section_chart(inv, wb, "bar", "Excess inventory value", 0, 9, 4, min(3+len(x),13), "M4")
+        pur = wb.add_worksheet("Purchase Plan")
+        _xlsx_title(pur, "Purchase Plan", "Recommended replenishment by SKU and supplier.", wb, 10)
+        x = a[a["Recommended_Order"] > 0].sort_values("Purchase_Value", ascending=False)
+        _xlsx_write_df(pur, x, 3, 0,
+                       ["SKU","Description","Supplier","Action","Recommended_Order","Unit_Cost","Purchase_Value","Days_Cover","Lead_Time_Days","Open_PO","PO_Adequacy"],
+                       "PurchasePlan", formats={**fmt, "Unit_Cost": fmt["currency"], "Purchase_Value": fmt["currency"], "Recommended_Order":fmt["integer"], "Open_PO":fmt["integer"]}, widths={"Description":30})
+        _xlsx_write_section_chart(pur, wb, "column", "Purchase value by SKU", 0, 6, 4, min(3+len(x),13), "M4")
+        act = wb.add_worksheet("Action Plan")
+        _xlsx_title(act, "Weekly Action Plan", "Owner, timing, reason and confidence.", wb, 9)
+        _xlsx_write_df(act, plan, 3, 0,
+                       ["Priority","SKU","Description","Supplier","Action","Owner","Deadline","Reason","Confidence","Purchase_Value"],
+                       "DetailedActionPlan", formats={**fmt, "Purchase_Value": fmt["currency"]}, widths={"Description":30,"Reason":34})
+        sup = wb.add_worksheet("Supplier Risk")
+        _xlsx_title(sup, "Supplier Risk", "Risk concentration and economic exposure.", wb, 8)
+        s = a.groupby("Supplier", as_index=False).agg(
+            SKUs=("SKU","count"), Critical=("Status", lambda z:int((z=="🔴 CRITICAL").sum())),
+            Review=("Status", lambda z:int((z=="🟠 REVIEW").sum())),
+            Purchase_Value=("Purchase_Value","sum"), Inventory_Value=("Inventory_Value","sum"),
+            Service_Risk_Value=("Service_Risk_Value","sum"), Excess_Inventory_Value=("Excess_Inventory_Value","sum")
+        )
+        s["Supplier_Risk_Score"] = s["Critical"]*100 + s["Review"]*40 + np.log1p(s["Service_Risk_Value"])*5 + np.log1p(s["Purchase_Value"])*2
+        s = s.sort_values("Supplier_Risk_Score", ascending=False)
+        _xlsx_write_df(sup, s, 3, 0,
+                       ["Supplier","SKUs","Critical","Review","Supplier_Risk_Score","Service_Risk_Value","Purchase_Value","Inventory_Value","Excess_Inventory_Value"],
+                       "SupplierRisk", formats={**fmt, "Service_Risk_Value":fmt["currency"],"Purchase_Value":fmt["currency"],"Inventory_Value":fmt["currency"],"Excess_Inventory_Value":fmt["currency"]}, widths={"Supplier":22})
+        _xlsx_write_section_chart(sup, wb, "column", "Supplier risk score", 0, 4, 4, min(3+len(s),13), "K4")
+        dqs = wb.add_worksheet("Data Quality")
+        _xlsx_title(dqs, "Data Quality", "Severity and counts for the current dataset.", wb, 4)
+        _xlsx_write_df(dqs, dq, 3, 0, ["Category","Check","Status","Count","Details"], "DetailedDQ", widths={"Check":30,"Details":42})
+
+    else:
+        fmt = _xlsx_base_formats(wb)
+        ex = wb.add_worksheet("Executive")
+        _xlsx_title(ex, "Supply Chain AI — Complete Management Pack", "Executive dashboard for the full workbook.", wb, 11)
+        _xlsx_kpi_block(ex, wb, 3, 0, 3, "Inventory value", f"€{a['Inventory_Value'].sum():,.0f}", "#EAF2FF")
+        _xlsx_kpi_block(ex, wb, 3, 3, 3, "Purchase requirement", f"€{a['Purchase_Value'].sum():,.0f}", "#ECFDF5")
+        _xlsx_kpi_block(ex, wb, 3, 6, 3, "Service risk", f"€{a['Service_Risk_Value'].sum():,.0f}", "#FEF2F2")
+        _xlsx_kpi_block(ex, wb, 3, 9, 3, "Excess exposure", f"€{a['Excess_Inventory_Value'].sum():,.0f}", "#FFF7ED")
+        top = a.sort_values("Decision_Score", ascending=False).head(10)
+        _xlsx_write_df(ex, top, 8, 0,
+                       ["SKU","Description","Supplier","Status","Action","Action_Timing","Recommended_Order","Purchase_Value"],
+                       "CompleteExec", formats={**fmt, "Purchase_Value":fmt["currency"],"Recommended_Order":fmt["integer"]}, widths={"Description":30})
+
+        # Detailed sheets are included as part of the complete pack.
+        inv = wb.add_worksheet("Inventory Risk")
+        _xlsx_title(inv, "Inventory & Service Risk", "Excess inventory and service-risk exposure.", wb, 10)
+        x = a.sort_values("Excess_Inventory_Value", ascending=False).head(20)
+        _xlsx_write_df(inv, x, 3, 0,
+                       ["SKU","Description","Supplier","Status","Days_Cover","Lead_Time_Days","Stock","Open_PO","Excess_Inventory_Qty","Excess_Inventory_Value","Service_Risk_Value"],
+                       "CompleteInventoryRisk", formats={**fmt,"Excess_Inventory_Value":fmt["currency"],"Service_Risk_Value":fmt["currency"]}, widths={"Description":30})
+
+        pur = wb.add_worksheet("Purchase Plan")
+        _xlsx_title(pur, "Purchase Plan", "Recommended replenishment by SKU and supplier.", wb, 10)
+        x = a[a["Recommended_Order"] > 0].sort_values("Purchase_Value", ascending=False)
+        _xlsx_write_df(pur, x, 3, 0,
+                       ["SKU","Description","Supplier","Action","Recommended_Order","Unit_Cost","Purchase_Value","Days_Cover","Lead_Time_Days","Open_PO","PO_Adequacy"],
+                       "CompletePurchasePlan", formats={**fmt,"Unit_Cost":fmt["currency"],"Purchase_Value":fmt["currency"],"Recommended_Order":fmt["integer"],"Open_PO":fmt["integer"]}, widths={"Description":30})
+
+        act = wb.add_worksheet("Action Plan")
+        _xlsx_title(act, "Weekly Action Plan", "Owner, timing, reason and confidence.", wb, 9)
+        _xlsx_write_df(act, plan, 3, 0,
+                       ["Priority","SKU","Description","Supplier","Action","Owner","Deadline","Reason","Confidence","Purchase_Value"],
+                       "CompleteActionPlan", formats={**fmt,"Purchase_Value":fmt["currency"]}, widths={"Description":30,"Reason":34})
+
+        sup = wb.add_worksheet("Supplier Risk")
+        _xlsx_title(sup, "Supplier Risk", "Risk concentration and economic exposure.", wb, 8)
+        s = a.groupby("Supplier", as_index=False).agg(
+            SKUs=("SKU","count"), Critical=("Status", lambda z:int((z=="🔴 CRITICAL").sum())),
+            Review=("Status", lambda z:int((z=="🟠 REVIEW").sum())),
+            Purchase_Value=("Purchase_Value","sum"), Inventory_Value=("Inventory_Value","sum"),
+            Service_Risk_Value=("Service_Risk_Value","sum"), Excess_Inventory_Value=("Excess_Inventory_Value","sum")
+        )
+        s["Supplier_Risk_Score"] = s["Critical"]*100 + s["Review"]*40 + np.log1p(s["Service_Risk_Value"])*5 + np.log1p(s["Purchase_Value"])*2
+        s = s.sort_values("Supplier_Risk_Score", ascending=False)
+        _xlsx_write_df(sup, s, 3, 0,
+                       ["Supplier","SKUs","Critical","Review","Supplier_Risk_Score","Service_Risk_Value","Purchase_Value","Inventory_Value","Excess_Inventory_Value"],
+                       "CompleteSupplierRisk", formats={**fmt,"Service_Risk_Value":fmt["currency"],"Purchase_Value":fmt["currency"],"Inventory_Value":fmt["currency"],"Excess_Inventory_Value":fmt["currency"]}, widths={"Supplier":22})
+
+        dqs = wb.add_worksheet("Data Quality")
+        _xlsx_title(dqs, "Data Quality", "Severity and counts for the current dataset.", wb, 4)
+        _xlsx_write_df(dqs, dq, 3, 0, ["Category","Check","Status","Count","Details"], "CompleteDQ", widths={"Check":30,"Details":42})
+
+        src_ws = wb.add_worksheet("Source Data")
+        _xlsx_title(src_ws, "Source Data", "Normalized source dataset used by the decision engine.", wb, max(5, len(raw.columns)-1))
+        _xlsx_write_df(src_ws, raw, 3, 0, list(raw.columns), "CompleteSourceData")
+
+    wb.close()
+    return buf.getvalue()
+
+def _excel_export_bytes(kind, a, raw, dq, plan):
+    if xlsxwriter is None:
+        raise RuntimeError("XlsxWriter is not available. Add XlsxWriter to requirements.txt and redeploy.")
+    return _xlsx_stream_build(kind, a, raw, dq, plan)
 
 
 def validate(df):
@@ -1378,7 +1606,7 @@ a["Forecast_Change_Pct"] = np.where(
 # Header
 # -----------------------------
 st.title("📦 Supply Chain AI Copilot")
-st.caption("From raw supply-chain data to prioritized decisions · V1.8")
+st.caption("From raw supply-chain data to prioritized decisions · V1.8.1")
 
 c1,c2,c3,c4,c5,c6 = st.columns(6)
 c1.metric("SKUs", K["sku"])
