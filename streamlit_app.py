@@ -3156,120 +3156,114 @@ def localize_df(df):
 # The wrapper below adds a lightweight, reusable header-filter layer to every
 # dataframe in the application. Filters are applied to the canonical dataframe
 # before localization, so English/Spanish display never affects calculations.
-_original_st_dataframe = st.dataframe
-
-# Robust per-table filter layer.
-# Widget IDs are derived from the caller source line, with a per-run occurrence
-# counter for the rare case where the same dataframe call is executed in a loop.
-_scai_filter_occurrences = {}
-
-# Persistent widget-key registry. Streamlit reruns the script from top to bottom,
-# so module-level counters are reset on every interaction. A session-level registry
-# gives each table/filter widget a stable and genuinely unique key across reruns.
-def _scai_stable_filter_id(callsite, occurrence):
-    registry = st.session_state.setdefault("_scai_filter_key_registry", {})
-    registry_key = f"{callsite}::{occurrence}"
-    if registry_key not in registry:
-        registry[registry_key] = hashlib.sha1(
-            f"{registry_key}::{len(registry)}".encode("utf-8")
-        ).hexdigest()[:20]
-    return registry[registry_key]
 
 
-def _filterable_dataframe(data, *args, **kwargs):
+# -----------------------------
+# Reliable filterable dataframes
+# -----------------------------
+# Streamlit does not currently expose true Excel-style filters inside the native
+# dataframe header. To keep the app stable across reruns, each table uses an
+# explicit, source-level table key and its filters live in one form. This avoids
+# monkey-patching st.dataframe and prevents DuplicateElementKey errors.
+def render_filterable_dataframe(data, *args, table_key, **kwargs):
     if not isinstance(data, pd.DataFrame):
-        return _original_st_dataframe(data, *args, **kwargs)
+        return st.dataframe(data, *args, **kwargs)
 
-    caller = inspect.currentframe().f_back
-    caller_file = caller.f_code.co_filename if caller is not None else "unknown"
-    caller_line = caller.f_lineno if caller is not None else 0
-    callsite = f"{caller_file}:{caller_line}"
-    occurrence = _scai_filter_occurrences.get(callsite, 0) + 1
-    _scai_filter_occurrences[callsite] = occurrence
-    table_id = _scai_stable_filter_id(callsite, occurrence)
     df_original = data.copy()
-    df = df_original.copy()
-
+    df_filtered = df_original.copy()
     is_es = st.session_state.get("language", "English") == "Spanish"
-    if len(df.columns) > 0 and len(df) > 0:
-        filter_label = "🔎 Filtros de cabecera" if is_es else "🔎 Header filters"
-        helper_label = (
-            "Filtra cada columna. Deja el campo vacío para no aplicar el filtro."
-            if is_es else
-            "Filter each column. Leave a field empty to keep that column unfiltered."
-        )
-        # Do not use an expander key or a generated dataframe key here.
-        # Streamlit's widgets are keyed explicitly below.
-        st.markdown(f"**{filter_label}**")
-        st.caption(helper_label)
-        with st.container(border=True):
-            filter_cols = st.columns(min(4, len(df.columns)))
-            for idx, col in enumerate(list(df.columns)):
-                col_name = str(col)
-                with filter_cols[idx % len(filter_cols)]:
-                    st.markdown(f"**{col_name}**")
-                    series = df_original[col]
-                    key_base = f"__scai_table_filter__{table_id}__{idx}"
 
-                    if pd.api.types.is_numeric_dtype(series):
-                        vals = pd.to_numeric(series, errors="coerce").dropna()
-                        if vals.empty:
-                            st.caption("—")
-                            continue
-                        lo = float(vals.min())
-                        hi = float(vals.max())
-                        if lo == hi:
-                            st.caption(f"= {lo:g}")
-                            continue
-                        cmin, cmax = st.columns(2)
-                        min_label = "Mín." if is_es else "Min"
-                        max_label = "Máx." if is_es else "Max"
-                        min_val = cmin.number_input(
-                            min_label, min_value=lo, max_value=hi, value=lo,
-                            key=key_base + "__min"
-                        )
-                        max_val = cmax.number_input(
-                            max_label, min_value=lo, max_value=hi, value=hi,
-                            key=key_base + "__max"
-                        )
-                        if min_val <= max_val:
-                            numeric = pd.to_numeric(df[col], errors="coerce")
-                            df = df[numeric.between(min_val, max_val, inclusive="both")]
+    if len(df_original.columns) > 0 and len(df_original) > 0:
+        filter_title = "🔎 Filtros de tabla" if is_es else "🔎 Table filters"
+        apply_label = "Aplicar filtros" if is_es else "Apply filters"
+        help_text = (
+            "Filtra cualquier columna. Los cambios se aplican al pulsar Aplicar filtros."
+            if is_es else
+            "Filter any column. Changes are applied when you click Apply filters."
+        )
+        with st.expander(filter_title, expanded=False):
+            st.caption(help_text)
+            with st.form(f"{table_key}__filter_form", clear_on_submit=False):
+                filter_cols = st.columns(min(3, max(1, len(df_original.columns))))
+                controls = []
+                for idx, col in enumerate(df_original.columns):
+                    series = df_original[col]
+                    with filter_cols[idx % len(filter_cols)]:
+                        label = str(col)
+                        safe = "".join(ch if ch.isalnum() or ch == "_" else "_" for ch in label)
+                        base = f"{table_key}__filter__{idx}__{safe}"
+                        if pd.api.types.is_numeric_dtype(series):
+                            vals = pd.to_numeric(series, errors="coerce").dropna()
+                            if vals.empty:
+                                controls.append((col, "empty_numeric", None))
+                                continue
+                            lo = float(vals.min())
+                            hi = float(vals.max())
+                            integer_like = bool(float(lo).is_integer() and float(hi).is_integer())
+                            c1, c2 = st.columns(2)
+                            if integer_like:
+                                min_val = c1.number_input(
+                                    "Min" if not is_es else "Mín.",
+                                    min_value=int(lo), max_value=int(hi), value=int(lo),
+                                    key=base + "__min"
+                                )
+                                max_val = c2.number_input(
+                                    "Max" if not is_es else "Máx.",
+                                    min_value=int(lo), max_value=int(hi), value=int(hi),
+                                    key=base + "__max"
+                                )
+                            else:
+                                min_val = c1.number_input(
+                                    "Min" if not is_es else "Mín.",
+                                    min_value=lo, max_value=hi, value=lo,
+                                    key=base + "__min"
+                                )
+                                max_val = c2.number_input(
+                                    "Max" if not is_es else "Máx.",
+                                    min_value=lo, max_value=hi, value=hi,
+                                    key=base + "__max"
+                                )
+                            controls.append((col, "numeric", (min_val, max_val)))
                         else:
-                            st.warning(
-                                "El mínimo no puede ser mayor que el máximo."
-                                if is_es else "Min cannot exceed Max"
-                            )
-                    else:
-                        query = st.text_input(
-                            "Contiene" if is_es else "Contains",
-                            value="",
-                            key=key_base + "__text",
-                            placeholder="Buscar..." if is_es else "Search..."
-                        )
-                        if query:
-                            mask = df[col].astype(str).str.contains(
-                                query, case=False, na=False, regex=False
-                            )
-                            df = df[mask]
+                            # For low-cardinality columns, use a multiselect.
+                            unique_vals = series.dropna().astype(str).drop_duplicates().tolist()
+                            if len(unique_vals) <= 30:
+                                selected = st.multiselect(
+                                    label,
+                                    options=sorted(unique_vals),
+                                    default=[],
+                                    key=base + "__multi"
+                                )
+                                controls.append((col, "multi", selected))
+                            else:
+                                query = st.text_input(
+                                    label,
+                                    value="",
+                                    key=base + "__text",
+                                    placeholder="Buscar..." if is_es else "Search..."
+                                )
+                                controls.append((col, "text", query))
+                submitted = st.form_submit_button(apply_label, use_container_width=True)
+
+            # Apply whatever values are currently stored in the stable widgets.
+            # This also preserves the filter state after subsequent app reruns.
+            for col, kind, value in controls:
+                if kind == "numeric":
+                    min_val, max_val = value
+                    numeric = pd.to_numeric(df_filtered[col], errors="coerce")
+                    df_filtered = df_filtered[numeric.between(min_val, max_val, inclusive="both")]
+                elif kind == "multi" and value:
+                    df_filtered = df_filtered[df_filtered[col].astype(str).isin(value)]
+                elif kind == "text" and value:
+                    mask = df_filtered[col].astype(str).str.contains(value, case=False, na=False, regex=False)
+                    df_filtered = df_filtered[mask]
 
             rows_label = "Filas mostradas" if is_es else "Rows shown"
-            st.caption(f"{rows_label}: {len(df):,} / {len(df_original):,}")
+            st.caption(f"{rows_label}: {len(df_filtered):,} / {len(df_original):,}")
 
-    # IMPORTANT: because st.dataframe is monkey-patched, every call reaches
-    # _original_st_dataframe from this same wrapper line. Without an explicit
-    # unique key Streamlit therefore sees different tables as the same element
-    # and raises StreamlitDuplicateElementKey. Always provide a deterministic
-    # unique dataframe key based on the original call site + occurrence.
-    caller_key = kwargs.pop("key", None)
-    if caller_key is not None:
-        dataframe_key = f"__scai_dataframe__{str(caller_key)}__{table_id}"
-    else:
-        dataframe_key = f"__scai_dataframe__{table_id}"
-    kwargs["key"] = dataframe_key
-    return _original_st_dataframe(localize_df(df), *args, **kwargs)
-
-st.dataframe = _filterable_dataframe
+    kwargs = dict(kwargs)
+    kwargs["key"] = f"{table_key}__dataframe"
+    return st.dataframe(localize_df(df_filtered), *args, **kwargs)
 
 _original_st_metric = st.metric
 def _localized_metric(label, *args, **kwargs):
@@ -3719,14 +3713,14 @@ with tabs[0]:
     st.divider()
 
     top = a.sort_values("Decision_Score", ascending=False).head(15)
-    st.dataframe(
+    render_filterable_dataframe(
         top[[
             "SKU","Description","Supplier","Status","Action","Action_Timing",
             "Decision_Confidence","Days_Cover","Lead_Time_Days",
             "Recommended_Order","Purchase_Value","Decision_Score"
         ]],
         use_container_width=True, hide_index=True
-    )
+    , table_key='scai_table_3716_4_23')
 
     critical_value = float(a.loc[a["Action"]=="BUY_NOW", "Inventory_Value"].sum())
     excess_value = float(a.loc[a["Action"]=="DO_NOT_BUY", "Inventory_Value"].sum())
@@ -3754,7 +3748,7 @@ with tabs[0]:
     if po.empty:
         st.success(tr("No purchase orders recommended."))
     else:
-        st.dataframe(po, use_container_width=True, hide_index=True)
+        render_filterable_dataframe(po, use_container_width=True, hide_index=True, table_key='scai_table_3751_8_22')
 
     st.markdown(f"#### 🤖 {tr('Continue with Copilot')}")
     dcq1, dcq2, dcq3 = st.columns(3)
@@ -3847,7 +3841,7 @@ with tabs[1]:
 
     st.markdown(f"#### 🧩 {tr('ABC / XYZ portfolio')}")
     abc_display = d["abc_xyz"].set_index("ABC_Class")
-    st.dataframe(abc_display, use_container_width=True)
+    render_filterable_dataframe(abc_display, use_container_width=True, table_key='scai_table_3844_4_21')
 
     st.markdown(f"#### 📋 {tr('Logistics KPI catalogue')}")
     kpi_display = d["kpis"].copy()
@@ -3860,7 +3854,7 @@ with tabs[1]:
             f"{row['Value']:,.0f}" if isinstance(row["Value"], (int, float, np.integer, np.floating)) else str(row["Value"])
         ), axis=1
     )
-    st.dataframe(kpi_display, use_container_width=True, hide_index=True)
+    render_filterable_dataframe(kpi_display, use_container_width=True, hide_index=True, table_key='scai_table_3857_4_20')
 
     st.markdown(f"#### 🔎 {tr('What the dashboard is telling the planner')}")
     insights = []
@@ -3943,7 +3937,7 @@ with tabs[2]:
         )
 
     st.subheader(tr("Recommended execution sequence"))
-    st.dataframe(
+    render_filterable_dataframe(
         planning[[
             "Execution_Priority","SKU","Description","Supplier",
             "Action","Execution_Task","Dependency","Action_Timing",
@@ -3952,7 +3946,7 @@ with tabs[2]:
         ]].head(20),
         use_container_width=True,
         hide_index=True
-    )
+    , table_key='scai_table_3940_4_19')
 
     st.subheader(tr("Planner rationale"))
     selected_plan_sku = st.selectbox(
@@ -4006,7 +4000,7 @@ with tabs[3]:
         "Days_Cover","Safety_Stock","Recommended_Order",
         "Inventory_Value","ABC_XYZ","Action","Action_Timing","Decision_Confidence"
     ]]
-    st.dataframe(inventory_view, use_container_width=True, hide_index=True)
+    render_filterable_dataframe(inventory_view, use_container_width=True, hide_index=True, table_key='scai_table_4003_4_18')
     inventory_export = _excel_tab_export_bytes(
         "Inventory", {"Inventory Health": inventory_view},
         {"Inventory value": float(a["Inventory_Value"].sum()), "Service risk": float(a["Service_Risk_Value"].sum()), "Excess exposure": float(a["Excess_Inventory_Value"].sum())}
@@ -4025,7 +4019,7 @@ with tabs[4]:
         "Forecast_Next_Month","Forecast_Change_Pct",
         "Trend_Units_Per_Month","Demand_CV"
     ]].sort_values("Forecast_Next_Month", ascending=False)
-    st.dataframe(f, use_container_width=True, hide_index=True)
+    render_filterable_dataframe(f, use_container_width=True, hide_index=True, table_key='scai_table_4022_4_17')
     forecast_export = _excel_tab_export_bytes(
         "Forecast", {"Demand Outlook": f},
         {"SKUs": int(len(f)), "Next-month forecast": float(f["Forecast_Next_Month"].sum()), "Avg monthly demand": float(f["Avg_Monthly_Demand"].sum())}
@@ -4044,7 +4038,7 @@ with tabs[5]:
         "SKU","Description","Annual_Consumption_Value",
         "ABC","Demand_CV","XYZ","ABC_XYZ"
     ]].sort_values("Annual_Consumption_Value", ascending=False)
-    st.dataframe(abc_view, use_container_width=True, hide_index=True)
+    render_filterable_dataframe(abc_view, use_container_width=True, hide_index=True, table_key='scai_table_4041_4_16')
     abc_export = _excel_tab_export_bytes(
         "ABC XYZ", {"ABC XYZ Segmentation": abc_view},
         {"SKUs": int(len(abc_view)), "A class": int((abc_view["ABC"]=="A").sum()), "X class": int((abc_view["XYZ"]=="X").sum())}
@@ -4065,7 +4059,7 @@ with tabs[6]:
         Critical=("Status", lambda s: (s=="🔴 CRITICAL").sum()),
         Avg_Cover=("Days_Cover","mean")
     ).sort_values(["Critical","Inventory_Value"], ascending=[False,False])
-    st.dataframe(sup, use_container_width=True, hide_index=True)
+    render_filterable_dataframe(sup, use_container_width=True, hide_index=True, table_key='scai_table_4062_4_15')
     supplier_export = _excel_tab_export_bytes(
         "Suppliers", {"Supplier Exposure": sup},
         {"Suppliers": int(len(sup)), "Critical SKUs": int(sup["Critical"].sum()), "Purchase exposure": float(sup["Purchase_Value"].sum()), "Inventory value": float(sup["Inventory_Value"].sum())}
@@ -4177,7 +4171,7 @@ with tabs[7]:
                     row[tr(metric_key)] = value
                 comparison_rows.append(row)
             comparison_df = pd.DataFrame(comparison_rows)
-            st.dataframe(comparison_df, use_container_width=True, hide_index=True)
+            render_filterable_dataframe(comparison_df, use_container_width=True, hide_index=True, table_key='scai_table_4174_12_14')
 
             st.markdown(f"**{tr('Scenario KPI comparison')}**")
             financial_metrics = ["Purchase need", "Service risk", "Excess inventory", "Required stock value"]
@@ -4258,7 +4252,7 @@ with tabs[7]:
             [tr("Required stock value"), base_required, sim_required, sim_required-base_required],
             [tr("Median days cover"), base_cover, sim_cover, sim_cover-base_cover],
         ], columns=[tr("Metric"), tr("Current policy"), tr("Scenario"), tr("Change")])
-        st.dataframe(impact, use_container_width=True, hide_index=True)
+        render_filterable_dataframe(impact, use_container_width=True, hide_index=True, table_key='scai_table_4255_8_13')
 
         st.markdown(f"**{tr('Scenario decision impact')}**")
         scenario_view = sim_a[[
@@ -4266,7 +4260,7 @@ with tabs[7]:
             "Lead_Time_Days","Recommended_Order","Purchase_Value",
             "Service_Risk_Value","Excess_Inventory_Value","Decision_Confidence"
         ]].copy().sort_values(["Status","Purchase_Value"], ascending=[True, False])
-        st.dataframe(scenario_view.head(100), use_container_width=True, hide_index=True)
+        render_filterable_dataframe(scenario_view.head(100), use_container_width=True, hide_index=True, table_key='scai_table_4263_8_12')
 
         base_actions = a.set_index("SKU")["Action"].to_dict()
         changed_actions = int(sum(base_actions.get(sku) != action for sku, action in zip(sim_a["SKU"], sim_a["Action"])))
@@ -4373,7 +4367,7 @@ with tabs[8]:
         b2.metric(tr("Parent SKUs"), bom["Parent_SKU"].nunique())
         b3.metric(tr("Components"), bom["Component_SKU"].nunique())
         b4.metric(tr("Max scrap %"), f"{bom['Scrap_Pct'].max():.1f}%")
-        st.dataframe(bom[["Parent_SKU","Component_SKU","Qty_Per","Scrap_Pct"]].head(100), use_container_width=True, hide_index=True)
+        render_filterable_dataframe(bom[["Parent_SKU","Component_SKU","Qty_Per","Scrap_Pct"]].head(100), use_container_width=True, hide_index=True, table_key='scai_table_4370_8_11')
         dataset_skus=set(raw["SKU"].astype(str))
         missing_components=sorted(set(bom["Component_SKU"].astype(str))-dataset_skus)
         missing_parents=sorted(set(bom["Parent_SKU"].astype(str))-dataset_skus)
@@ -4434,7 +4428,7 @@ with tabs[8]:
                 st.markdown(f"### 🏭 {tr('Planned production')}")
                 prod_view=mps_df.reindex(columns=["Parent_SKU","Period","Gross_Requirement","Planned_Production","Projected_Ending_Inventory"]).copy()
                 prod_view.columns=[tr("Parent SKU"),tr("Period"),tr("Gross requirements"),tr("Planned production"),tr("Projected ending inventory")]
-                st.dataframe(prod_view,use_container_width=True,hide_index=True)
+                render_filterable_dataframe(prod_view,use_container_width=True,hide_index=True, table_key='scai_table_4431_16_10')
 
                 st.markdown(f"### 🧩 {tr('Component requirements')}")
                 comp_summary=mrp_df.groupby("Component_SKU",as_index=False).agg(
@@ -4445,7 +4439,7 @@ with tabs[8]:
                     Planned_Purchase_Value=("Planned_Purchase_Value","sum"),
                     Supplier=("Supplier","first"), Lead_Time_Days=("Lead_Time_Days","first"), MOQ=("MOQ","first")
                 ).sort_values(["Shortage","Planned_Purchase_Value"],ascending=[False,False])
-                st.dataframe(comp_summary.rename(columns={"Component_SKU":tr("Component SKU"),"Gross_Requirement":tr("Gross requirements"),"Net_Requirement":tr("Net requirements"),"Planned_Order_Receipt":tr("Planned order receipts"),"Shortage":tr("Shortage"),"Planned_Purchase_Value":tr("Total planned purchase"),"Supplier":tr("Supplier"),"Lead_Time_Days":tr("Lead time"),"MOQ":tr("MOQ")}),use_container_width=True,hide_index=True)
+                render_filterable_dataframe(comp_summary.rename(columns={"Component_SKU":tr("Component SKU"),"Gross_Requirement":tr("Gross requirements"),"Net_Requirement":tr("Net requirements"),"Planned_Order_Receipt":tr("Planned order receipts"),"Shortage":tr("Shortage"),"Planned_Purchase_Value":tr("Total planned purchase"),"Supplier":tr("Supplier"),"Lead_Time_Days":tr("Lead time"),"MOQ":tr("MOQ")}),use_container_width=True,hide_index=True, table_key='scai_table_4442_16_9')
 
                 st.markdown(f"### ⚠️ {tr('MRP exception messages')}")
                 exceptions=mrp_df[mrp_df["Shortage"]>0].copy()
@@ -4455,7 +4449,7 @@ with tabs[8]:
                     st.warning(tr("Material shortages requiring action."))
                     ex=exceptions[["Component_SKU","Period","Shortage","Supplier","Lead_Time_Days"]].head(100).copy()
                     ex.columns=[tr("Component SKU"),tr("Period"),tr("Shortage"),tr("Supplier"),tr("Lead time")]
-                    st.dataframe(ex,use_container_width=True,hide_index=True)
+                    render_filterable_dataframe(ex,use_container_width=True,hide_index=True, table_key='scai_table_4452_20_8')
 
                 st.markdown(f"### 📅 {tr('MRP results')}")
                 # Keep the UI detail view aligned with the MRP engine schema.
@@ -4476,7 +4470,7 @@ with tabs[8]:
                     tr("Supplier"),tr("Lead time"),tr("MOQ"),tr("Unit cost"),
                     tr("Total planned purchase"),tr("Release Period"),tr("Action")
                 ]
-                st.dataframe(detail,use_container_width=True,hide_index=True)
+                render_filterable_dataframe(detail,use_container_width=True,hide_index=True, table_key='scai_table_4473_16_7')
 
                 st.markdown(f"### 📅 {tr('Action calendar')}")
                 action_cal=mrp_df[mrp_df["Planned_Order_Receipt"]>0].copy()
@@ -4486,7 +4480,7 @@ with tabs[8]:
                     action_cal=action_cal.sort_values(["Release_Period","Period","Component_SKU"])
                     action_view=action_cal[["Release_Period","Period","Component_SKU","Planned_Order_Receipt","Supplier","Lead_Time_Days","Action","Planned_Purchase_Value"]].copy()
                     action_view.columns=[tr("Release Period"),tr("Period"),tr("Component SKU"),tr("Planned order receipts"),tr("Supplier"),tr("Lead time"),tr("Action"),tr("Total planned purchase")]
-                    st.dataframe(action_view,use_container_width=True,hide_index=True)
+                    render_filterable_dataframe(action_view,use_container_width=True,hide_index=True, table_key='scai_table_4483_20_6')
 
                 mrp_export=_mrp_export_bytes(mps_df,mrp_df,mrp_meta,st.session_state.language)
                 if mrp_export:
@@ -4519,10 +4513,10 @@ with tabs[9]:
         st.metric(tr("Latest period"), dq_summary["latest_period"])
         st.metric(tr("Checks completed"), dq_summary["checks"])
     with c2:
-        st.dataframe(
+        render_filterable_dataframe(
             dq[["Category","Check","Status","Count","Details"]],
             use_container_width=True, hide_index=True
-        )
+        , table_key='scai_table_4516_8_5')
 
     st.subheader(f"📤 {tr('Export Data Quality')}")
     dq_html = build_data_quality_report_html(raw, dq)
@@ -4595,10 +4589,10 @@ with tabs[10]:
     m2.metric("Immediate", int(plan_view["Deadline"].eq("Today").sum()))
     m3.metric("Purchase value", f"€{plan_view['Purchase_Value'].sum():,.0f}")
 
-    st.dataframe(
+    render_filterable_dataframe(
         plan_view.drop(columns=["Action_Code"]),
         use_container_width=True, hide_index=True
-    )
+    , table_key='scai_table_4592_4_4')
 
     st.subheader(tr("Supplier follow-up"))
     supplier_skus = plan_view[plan_view["Action_Code"].isin(["BUY_NOW","CONFIRM_PO"])]["SKU"].astype(str).tolist()
@@ -4685,27 +4679,27 @@ with tabs[11]:
             "Purchase_Value_Delta","Service_Risk_Delta","Excess_Value_Delta","Sales_Delta_Pct",
             "Change_Classification","Change_Reason"
         ]].copy()
-        st.dataframe(view, use_container_width=True, hide_index=True)
+        render_filterable_dataframe(view, use_container_width=True, hide_index=True, table_key='scai_table_4682_8_3')
 
         c1, c2 = st.columns(2)
         with c1:
             st.subheader(tr("Top worsened / watch"))
             worsened = comparison[comparison["Change_Classification"].isin(["WORSENED","WATCH"])].head(8)
-            st.dataframe(
+            render_filterable_dataframe(
                 worsened[["SKU","Description","Current_Action","Days_Cover_Delta",
                           "Purchase_Value_Delta","Service_Risk_Delta","Change_Classification"]],
                 use_container_width=True, hide_index=True
-            )
+            , table_key='scai_table_4688_12_2')
         with c2:
             st.subheader(tr("Top improved"))
             improved = comparison[comparison["Change_Classification"]=="IMPROVED"].sort_values(
                 ["Service_Risk_Delta","Purchase_Value_Delta"], ascending=[True,True]
             ).head(8)
-            st.dataframe(
+            render_filterable_dataframe(
                 improved[["SKU","Description","Previous_Action","Current_Action",
                           "Days_Cover_Delta","Purchase_Value_Delta","Service_Risk_Delta"]],
                 use_container_width=True, hide_index=True
-            )
+            , table_key='scai_table_4698_12_1')
 
         change_report_html = build_change_monitor_html(comparison, comparison_meta)
 
