@@ -386,6 +386,127 @@ def data_quality_summary(df, dq):
     }
 
 
+
+def build_planning_agent(a, comparison=None, comparison_meta=None):
+    x = a.copy()
+
+    urgency = x["Action"].map({
+        "BUY_NOW": 100, "CONFIRM_PO": 85, "REVIEW": 60,
+        "DO_NOT_BUY": 45, "MONITOR": 10
+    }).fillna(0)
+
+    def norm(s):
+        m = float(s.max()) if len(s) else 0.0
+        return s / m if m > 0 else s * 0
+
+    risk_value = pd.to_numeric(x["Service_Risk_Value"], errors="coerce").fillna(0)
+    purchase_value = pd.to_numeric(x["Purchase_Value"], errors="coerce").fillna(0)
+    decision_score = pd.to_numeric(x["Decision_Score"], errors="coerce").fillna(0)
+    cover_gap = pd.to_numeric(x["Lead_Time_Gap_Days"], errors="coerce").fillna(0)
+
+    x["Execution_Score"] = (
+        urgency * 0.40
+        + norm(risk_value) * 35
+        + norm(purchase_value) * 15
+        + norm(decision_score) * 10
+        + np.maximum(-cover_gap, 0) * 2
+    )
+
+    def execution_meta(r):
+        if r["Action"] == "CONFIRM_PO":
+            return 1, "Confirm supplier ETA / quantity"
+        if r["Action"] == "BUY_NOW":
+            return 2, "Release / validate purchase"
+        if r["Action"] == "DO_NOT_BUY":
+            return 3, "Block replenishment"
+        if r["Action"] == "REVIEW":
+            return 4, "Review policy / planning parameters"
+        return 5, "Monitor"
+
+    steps = x.apply(execution_meta, axis=1, result_type="expand")
+    x["Execution_Step"] = steps[0].astype(int)
+    x["Execution_Task"] = steps[1]
+
+    x["Dependency"] = np.where(
+        x["Action"].eq("BUY_NOW") & x["Open_PO"].gt(0),
+        "Validate existing PO first",
+        np.where(x["Action"].eq("CONFIRM_PO"),
+                 "Supplier confirmation required",
+                 "No dependency")
+    )
+
+    x["Expected_Service_Risk_Addressed"] = np.where(
+        x["Action"].isin(["BUY_NOW", "CONFIRM_PO"]),
+        np.minimum(
+            risk_value,
+            np.maximum(
+                pd.to_numeric(x["Recommended_Order"], errors="coerce").fillna(0)
+                * pd.to_numeric(x["Unit_Cost"], errors="coerce").fillna(0),
+                0
+            )
+        ),
+        0
+    )
+
+    x["Blocked_Purchase_Exposure"] = np.where(
+        x["Action"].eq("DO_NOT_BUY"), purchase_value, 0
+    )
+
+    x["Planning_Rationale"] = x.apply(
+        lambda r: (
+            f"{r['Action']}: {r['Description']}. "
+            f"Coverage {r['Days_Cover']:.1f}d vs lead time {r['Lead_Time_Days']:.1f}d. "
+            f"Service-risk exposure €{r['Service_Risk_Value']:,.0f}. "
+            f"Purchase exposure €{r['Purchase_Value']:,.0f}. "
+            f"{r['Dependency']}."
+        ),
+        axis=1
+    )
+
+    x = x.sort_values(
+        ["Execution_Step","Execution_Score","Service_Risk_Value","Decision_Score"],
+        ascending=[True,False,False,False]
+    ).reset_index(drop=True)
+    x["Execution_Priority"] = np.arange(1, len(x) + 1)
+
+    meta = {
+        "action_count": int(len(x)),
+        "immediate_count": int(x["Action"].isin(["BUY_NOW","CONFIRM_PO"]).sum()),
+        "purchase_value": float(x["Purchase_Value"].sum()),
+        "service_risk_value": float(x["Service_Risk_Value"].sum()),
+        "service_risk_addressed": float(x["Expected_Service_Risk_Addressed"].sum()),
+        "blocked_purchase_exposure": float(x["Blocked_Purchase_Exposure"].sum()),
+        "buy_now_count": int((x["Action"]=="BUY_NOW").sum()),
+        "confirm_po_count": int((x["Action"]=="CONFIRM_PO").sum()),
+        "block_count": int((x["Action"]=="DO_NOT_BUY").sum()),
+        "review_count": int((x["Action"]=="REVIEW").sum()),
+    }
+    if comparison_meta and comparison_meta.get("has_comparison"):
+        meta["change_worsened"] = int(comparison_meta.get("worsened", 0))
+        meta["change_improved"] = int(comparison_meta.get("improved", 0))
+        meta["action_changes"] = int(comparison_meta.get("action_changes", 0))
+    else:
+        meta["change_worsened"] = 0
+        meta["change_improved"] = 0
+        meta["action_changes"] = 0
+
+    return x, meta
+
+def agent_planning_tool(a, comparison=None, comparison_meta=None):
+    planning, meta = build_planning_agent(a, comparison, comparison_meta)
+    return {
+        "name": "planning_agent",
+        "purpose": "Create an ordered execution sequence from the decision engine.",
+        "kpis": meta,
+        "rows": planning.head(12)[[
+            "Execution_Priority","SKU","Description","Supplier","Action",
+            "Execution_Task","Dependency","Action_Timing","Days_Cover",
+            "Lead_Time_Days","Recommended_Order","Purchase_Value",
+            "Service_Risk_Value","Expected_Service_Risk_Addressed",
+            "Blocked_Purchase_Exposure","Decision_Confidence","Planning_Rationale"
+        ]].round(2).to_dict("records")
+    }
+
 def build_action_plan(a):
     x = a.sort_values("Decision_Score", ascending=False).copy()
     plan = []
@@ -544,7 +665,7 @@ td{{padding:10px;border-bottom:1px solid var(--line);vertical-align:top}}
 <div class="header">
 <h1>{html_lib.escape(title)}</h1>
 <p>{html_lib.escape(subtitle)}</p>
-<div class="meta">Generated {generated} · Supply Chain AI Copilot V1.9.3</div>
+<div class="meta">Generated {generated} · Supply Chain AI Copilot V2.0</div>
 </div>
 {body}
 <div class="footer">Decision support only. Validate purchase execution and supplier commitments before release.</div>
@@ -719,6 +840,50 @@ def build_data_quality_report_html(raw, dq):
     return _html_shell("🧹 Data Quality Report", "Structural and consistency checks for the current dataset.", body)
 
 
+
+def build_planning_agent_html(planning, meta):
+    body = f"""
+<div class="grid">
+<div class="card"><div class="label">Immediate actions</div><div class="value">{meta["immediate_count"]}</div></div>
+<div class="card"><div class="label">Purchase exposure</div><div class="value">{_fmt_eur(meta["purchase_value"])}</div></div>
+<div class="card"><div class="label">Service risk</div><div class="value">{_fmt_eur(meta["service_risk_value"])}</div></div>
+<div class="card"><div class="label">Risk potentially addressed</div><div class="value">{_fmt_eur(meta["service_risk_addressed"])}</div></div>
+</div>
+<div class="grid">
+<div class="card"><div class="label">BUY_NOW</div><div class="value">{meta["buy_now_count"]}</div></div>
+<div class="card"><div class="label">CONFIRM_PO</div><div class="value">{meta["confirm_po_count"]}</div></div>
+<div class="card"><div class="label">Block replenishment</div><div class="value">{meta["block_count"]}</div></div>
+<div class="card"><div class="label">Blocked exposure</div><div class="value">{_fmt_eur(meta["blocked_purchase_exposure"])}</div></div>
+</div>
+<div class="section">
+<h2>Execution sequence</h2>
+<div class="note">Actions are ordered using urgency, service-risk exposure, economic exposure and existing decision score. This is decision support, not automatic order release.</div>
+<table><thead><tr>
+<th>Step</th><th>SKU</th><th>Description</th><th>Supplier</th><th>Task</th>
+<th>Dependency</th><th>Timing</th><th>Qty</th><th>Purchase</th>
+<th>Service risk</th><th>Risk addressed</th><th>Confidence</th>
+</tr></thead>
+<tbody>{_table_html(
+    planning.head(20),
+    ["Execution_Priority","SKU","Description","Supplier","Execution_Task","Dependency",
+     "Action_Timing","Recommended_Order","Purchase_Value","Service_Risk_Value",
+     "Expected_Service_Risk_Addressed","Decision_Confidence"],
+    ["Purchase_Value","Service_Risk_Value","Expected_Service_Risk_Addressed"],
+    status_cols=["Decision_Confidence"]
+)}</tbody></table>
+</div>
+<div class="section">
+<h2>Planner rationale</h2>
+<table><thead><tr><th>SKU</th><th>Action</th><th>Rationale</th></tr></thead>
+<tbody>{_table_html(planning.head(20), ["SKU","Action","Planning_Rationale"], status_cols=["Action"])}</tbody></table>
+</div>
+"""
+    return _html_shell(
+        "🧠 Supply Chain AI — Planning Agent",
+        "Ordered execution sequence from inventory, demand, risk and purchasing signals.",
+        body
+    )
+
 def build_change_monitor_html(comparison, meta):
     if comparison is None or comparison.empty or not meta.get("has_comparison"):
         return _html_shell(
@@ -768,6 +933,8 @@ def build_management_pack(a, raw, dq, plan, comparison=None, comparison_meta=Non
     }
     if comparison is not None and comparison_meta is not None:
         reports["07_Change_Monitor_Report.html"] = build_change_monitor_html(comparison, comparison_meta)
+    planning, planning_meta = build_planning_agent(a, comparison, comparison_meta)
+    reports["08_Planning_Agent_Report.html"] = build_planning_agent_html(planning, planning_meta)
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
         for name, text in reports.items():
@@ -1072,6 +1239,66 @@ def _xlsx_build_complete(a, raw, dq, plan):
     return wb
 
 
+
+def _excel_planning_agent_bytes(planning, meta):
+    if xlsxwriter is None:
+        raise RuntimeError("XlsxWriter is not available. Add XlsxWriter to requirements.txt and redeploy.")
+    buf = io.BytesIO()
+    wb = xlsxwriter.Workbook(buf, {"in_memory": True})
+    fmt = _xlsx_base_formats(wb)
+    ws = wb.add_worksheet("Planning Agent")
+
+    _xlsx_title(
+        ws,
+        "Supply Chain AI — Planning Agent",
+        "Ordered execution sequence generated from the decision engine.",
+        wb, 11
+    )
+    _xlsx_kpi_block(ws, wb, 3, 0, 3, "Immediate actions", str(meta["immediate_count"]), "#FEF3C7")
+    _xlsx_kpi_block(ws, wb, 3, 3, 3, "Purchase exposure", f"€{meta['purchase_value']:,.0f}", "#ECFDF5")
+    _xlsx_kpi_block(ws, wb, 3, 6, 3, "Service risk", f"€{meta['service_risk_value']:,.0f}", "#FEF2F2")
+    _xlsx_kpi_block(ws, wb, 3, 9, 3, "Risk addressed", f"€{meta['service_risk_addressed']:,.0f}", "#EAF2FF")
+
+    cols = [
+        "Execution_Priority","SKU","Description","Supplier","Action","Execution_Task",
+        "Dependency","Action_Timing","Recommended_Order","Purchase_Value",
+        "Service_Risk_Value","Expected_Service_Risk_Addressed","Blocked_Purchase_Exposure",
+        "Decision_Confidence","Planning_Rationale"
+    ]
+    _xlsx_write_df(
+        ws, planning.head(30), 8, 0, cols, wb, "PlanningAgentQueue",
+        formats={
+            **fmt,
+            "Purchase_Value": fmt["currency"],
+            "Service_Risk_Value": fmt["currency"],
+            "Expected_Service_Risk_Addressed": fmt["currency"],
+            "Blocked_Purchase_Exposure": fmt["currency"],
+            "Recommended_Order": fmt["integer"],
+        },
+        widths={"Description":30,"Execution_Task":28,"Dependency":30,"Planning_Rationale":48}
+    )
+    action_counts = planning["Action"].value_counts().reset_index()
+    action_counts.columns = ["Action","SKUs"]
+    base_row = 42
+    summary_fmt = wb.add_format({"bold":True,"font_color":"#FFFFFF","bg_color":"#17365D","align":"center"})
+    ws.write_row(base_row, 0, ["Action","SKUs"], summary_fmt)
+    for i, r in action_counts.iterrows():
+        ws.write(base_row+1+i, 0, r["Action"])
+        ws.write(base_row+1+i, 1, int(r["SKUs"]))
+    chart = wb.add_chart({"type":"column"})
+    chart.add_series({
+        "name":"SKUs",
+        "categories":f"='Planning Agent'!$A${base_row+2}:$A${base_row+1+len(action_counts)}",
+        "values":f"='Planning Agent'!$B${base_row+2}:$B${base_row+1+len(action_counts)}"
+    })
+    chart.set_title({"name":"Execution workload"})
+    chart.set_legend({"none":True})
+    chart.set_style(10)
+    ws.insert_chart("R9", chart, {"x_scale":1.0,"y_scale":0.9})
+    ws.freeze_panes(9,0)
+    wb.close()
+    return buf.getvalue()
+
 def _excel_change_monitor_bytes(comparison, comparison_meta):
     if xlsxwriter is None:
         raise RuntimeError("XlsxWriter is not available. Add XlsxWriter to requirements.txt and redeploy.")
@@ -1364,6 +1591,37 @@ def _xlsx_stream_build(kind, a, raw, dq, plan, comparison=None, comparison_meta=
             )
         except Exception:
             pass
+
+    planning_sheet_df, planning_meta_xlsx = build_planning_agent(a, comparison, comparison_meta)
+    pa = wb.add_worksheet("Planning Agent")
+    fmt_pa = _xlsx_base_formats(wb)
+    _xlsx_title(pa, "Supply Chain AI — Planning Agent",
+                "Ordered execution sequence generated by the decision engine.", wb, 11)
+    _xlsx_kpi_block(pa, wb, 3, 0, 3, "Immediate actions", str(planning_meta_xlsx["immediate_count"]), "#FEF3C7")
+    _xlsx_kpi_block(pa, wb, 3, 3, 3, "Purchase exposure", f"€{planning_meta_xlsx['purchase_value']:,.0f}", "#ECFDF5")
+    _xlsx_kpi_block(pa, wb, 3, 6, 3, "Service risk", f"€{planning_meta_xlsx['service_risk_value']:,.0f}", "#FEF2F2")
+    _xlsx_kpi_block(pa, wb, 3, 9, 3, "Risk addressed", f"€{planning_meta_xlsx['service_risk_addressed']:,.0f}", "#EAF2FF")
+
+    pa_cols = [
+        "Execution_Priority","SKU","Description","Supplier","Action","Execution_Task",
+        "Dependency","Action_Timing","Recommended_Order","Purchase_Value",
+        "Service_Risk_Value","Expected_Service_Risk_Addressed","Blocked_Purchase_Exposure",
+        "Decision_Confidence","Planning_Rationale"
+    ]
+    _xlsx_write_df(
+        pa, planning_sheet_df.head(30), 8, 0, pa_cols, wb, "PlanningAgentQueue",
+        formats={
+            **fmt_pa,
+            "Purchase_Value": fmt_pa["currency"],
+            "Service_Risk_Value": fmt_pa["currency"],
+            "Expected_Service_Risk_Addressed": fmt_pa["currency"],
+            "Blocked_Purchase_Exposure": fmt_pa["currency"],
+            "Recommended_Order": fmt_pa["integer"],
+        },
+        widths={"Description":30,"Execution_Task":28,"Dependency":30,"Planning_Rationale":48}
+    )
+    pa.freeze_panes(9, 0)
+
     wb.close()
     return buf.getvalue()
 
@@ -1688,6 +1946,13 @@ def agent_forecast_tool(a):
 def route_agent(question, a, comparison=None, comparison_meta=None):
     q = question.lower()
     tools = []
+    if any(k in q for k in [
+        "qué hago","que hago","qué debería hacer","que deberia hacer",
+        "siguiente","next step","plan de acción","plan de accion",
+        "execution","ejecutar","execute","secuencia","planning agent",
+        "cómo actuar","como actuar"
+    ]):
+        tools.append(agent_planning_tool(a, comparison, comparison_meta))
     if any(k in q for k in ["cambio","cambió","cambio","compar","anterior","último periodo","ultimo periodo","evolución","empeor","mejoró","mejoro","vs","versus"]):
         tools.append(agent_change_monitor_tool(comparison, comparison_meta))
     if any(k in q for k in ["compr","purchase","orden","po","reponer","buy"]):
@@ -1740,6 +2005,18 @@ def agent_local_response(question, a, comparison=None, comparison_meta=None):
             lines += [
                 f"- **{r['SKU']}** → forecast {r['Forecast_Next_Month']:.0f} uds ({r['Forecast_Change_Pct']:+.1f}%)."
                 for r in tool["rising"][:5]
+            ]
+        elif tool["name"] == "planning_agent":
+            k = tool["kpis"]
+            lines.append(
+                f"Plan de ejecución: **{k['immediate_count']} acciones inmediatas**, "
+                f"€{k['purchase_value']:,.0f} de exposición de compra y "
+                f"€{k['service_risk_addressed']:,.0f} de riesgo de servicio potencialmente abordable."
+            )
+            lines += [
+                f"- **Paso {r['Execution_Priority']} — {r['SKU']}**: {r['Execution_Task']} · "
+                f"{r['Dependency']} · {r['Action_Timing']}."
+                for r in tool["rows"][:8]
             ]
         elif tool["name"] == "change_monitor":
             if not tool["kpis"].get("available"):
@@ -2008,6 +2285,7 @@ if not _REQUIRED_ANALYSIS_COLUMNS.issubset(set(a.columns)):
 K = kpis(a)
 dq = data_quality_report(raw)
 plan = build_action_plan(a)
+planning, planning_meta = build_planning_agent(a)
 
 available_periods = _periods_from_raw(raw)
 if len(available_periods) >= 2:
@@ -2066,7 +2344,7 @@ a["Forecast_Change_Pct"] = np.where(
 # Header
 # -----------------------------
 st.title("📦 Supply Chain AI Copilot")
-st.caption("From raw supply-chain data to prioritized decisions · V1.9.3")
+st.caption("From raw supply-chain data to prioritized decisions · V2.0")
 
 c1,c2,c3,c4,c5,c6 = st.columns(6)
 c1.metric("SKUs", K["sku"])
@@ -2077,7 +2355,7 @@ c5.metric("💰 Inventory", f"€{K['inventory']:,.0f}")
 c6.metric("📈 Next month", f"{K['forecast']:,.0f}")
 
 tabs = st.tabs([
-    "🎯 Decision Center","📊 Inventory","📈 Forecast",
+    "🎯 Decision Center","🧠 Planning Agent","📊 Inventory","📈 Forecast",
     "🧩 ABC/XYZ","🚚 Suppliers","🧪 Scenarios","🧹 Data Quality",
     "📝 Action Plan","🔄 Change Monitor","🤖 Copilot","📤 Export"
 ])
@@ -2133,9 +2411,75 @@ with tabs[0]:
         st.dataframe(po, use_container_width=True, hide_index=True)
 
 # -----------------------------
-# Inventory
+# Planning Agent
 # -----------------------------
 with tabs[1]:
+    st.subheader("🧠 Planning Agent")
+    st.caption("Turns the decision engine into an ordered sequence of planner actions.")
+
+    p1, p2, p3, p4, p5 = st.columns(5)
+    p1.metric("Immediate actions", planning_meta["immediate_count"])
+    p2.metric("Purchase exposure", f"€{planning_meta['purchase_value']:,.0f}")
+    p3.metric("Service risk", f"€{planning_meta['service_risk_value']:,.0f}")
+    p4.metric("Risk addressed", f"€{planning_meta['service_risk_addressed']:,.0f}")
+    p5.metric("Blocked exposure", f"€{planning_meta['blocked_purchase_exposure']:,.0f}")
+
+    if planning_meta.get("action_changes", 0) > 0:
+        st.info(
+            f"Change Monitor detects {planning_meta['action_changes']} action changes; "
+            f"{planning_meta['change_worsened']} are classified as worsened."
+        )
+
+    st.subheader("Recommended execution sequence")
+    st.dataframe(
+        planning[[
+            "Execution_Priority","SKU","Description","Supplier",
+            "Action","Execution_Task","Dependency","Action_Timing",
+            "Recommended_Order","Purchase_Value","Service_Risk_Value",
+            "Expected_Service_Risk_Addressed","Decision_Confidence"
+        ]].head(20),
+        use_container_width=True,
+        hide_index=True
+    )
+
+    st.subheader("Planner rationale")
+    selected_plan_sku = st.selectbox(
+        "Explain the recommended action for",
+        options=[""] + planning["SKU"].astype(str).tolist()
+    )
+    if selected_plan_sku:
+        r = planning[planning["SKU"].astype(str) == selected_plan_sku].iloc[0]
+        st.info(r["Planning_Rationale"])
+
+    st.subheader("Export Planning Agent")
+    e1, e2 = st.columns(2)
+    with e1:
+        st.download_button(
+            "📊 Planning Agent Report (HTML)",
+            build_planning_agent_html(planning, planning_meta).encode("utf-8"),
+            "planning_agent_report.html",
+            "text/html",
+            use_container_width=True
+        )
+    with e2:
+        try:
+            planning_xlsx = _excel_planning_agent_bytes(planning, planning_meta)
+        except Exception as planning_exc:
+            planning_xlsx = None
+            st.warning(f"Excel export unavailable: {planning_exc}")
+        if planning_xlsx:
+            st.download_button(
+                "📗 Planning Agent Report (Excel)",
+                planning_xlsx,
+                "planning_agent_report.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True
+            )
+
+# -----------------------------
+# Inventory
+# -----------------------------
+with tabs[2]:
     st.subheader("Inventory health")
     left, right = st.columns(2)
     with left:
@@ -2155,7 +2499,7 @@ with tabs[1]:
 # -----------------------------
 # Forecast
 # -----------------------------
-with tabs[2]:
+with tabs[3]:
     st.subheader("Demand outlook")
     f = a[[
         "SKU","Description","Annual_Sales","Avg_Monthly_Demand",
@@ -2171,7 +2515,7 @@ with tabs[2]:
 # -----------------------------
 # ABC/XYZ
 # -----------------------------
-with tabs[3]:
+with tabs[4]:
     st.subheader("Segmentation")
     st.dataframe(
         a[[
@@ -2184,7 +2528,7 @@ with tabs[3]:
 # -----------------------------
 # Suppliers
 # -----------------------------
-with tabs[4]:
+with tabs[5]:
     st.subheader("Supplier exposure")
     sup = a.groupby("Supplier", as_index=False).agg(
         SKUs=("SKU","count"),
@@ -2198,7 +2542,7 @@ with tabs[4]:
 # -----------------------------
 # Scenarios
 # -----------------------------
-with tabs[5]:
+with tabs[6]:
     st.subheader("🧪 Policy simulator")
     st.caption("Simula decisiones antes de cambiar la política.")
     s1, s2 = st.columns(2)
@@ -2223,12 +2567,12 @@ with tabs[5]:
 # -----------------------------
 # Data Quality
 # -----------------------------
-with tabs[6]:
+with tabs[7]:
     st.subheader("🧹 Data Quality")
     st.caption("Checks the data before operational decisions are used.")
 
     dq_summary = data_quality_summary(raw, dq)
-    q1, q2, q3, q4, q5 = st.columns(5)
+    q1, q2, q3, q4, q5, q6 = st.columns(6)
     q1.metric("Rows", dq_summary["rows"])
     q2.metric("SKUs", dq_summary["skus"])
     q3.metric("Suppliers", dq_summary["suppliers"])
@@ -2263,7 +2607,7 @@ with tabs[6]:
 # -----------------------------
 # Action Plan
 # -----------------------------
-with tabs[7]:
+with tabs[8]:
     st.subheader("📝 Weekly Action Plan")
     st.caption("Planner-ready worklist generated by the Decision Engine.")
 
@@ -2333,7 +2677,7 @@ with tabs[7]:
 # -----------------------------
 # Change Monitor
 # -----------------------------
-with tabs[8]:
+with tabs[9]:
     st.subheader("🔄 What changed?")
     if not comparison_meta.get("has_comparison"):
         st.info("Necesitas al menos dos periodos históricos para comparar la evolución.")
@@ -2421,7 +2765,7 @@ with tabs[8]:
 # -----------------------------
 # Copilot
 # -----------------------------
-with tabs[9]:
+with tabs[10]:
     st.subheader("⚡ Quick analyses")
     q1, q2, q3, q4, q5 = st.columns(5)
     quick_question = None
@@ -2435,6 +2779,8 @@ with tabs[9]:
         quick_question = "¿Qué cambios de demanda pueden cambiar mis decisiones de compra?"
     if q5.button("🔄 What changed?"):
         quick_question = "¿Qué ha cambiado entre el último periodo y el anterior y cuáles son las 3 mayores variaciones?"
+    if q6.button("🧠 Action sequence"):
+        quick_question = "¿Qué debería hacer primero, segundo y tercero y por qué?"
     if quick_question:
         st.session_state.chat.append({"role": "user", "content": quick_question})
         with st.chat_message("user"):
@@ -2464,7 +2810,7 @@ with tabs[9]:
 # -----------------------------
 # Export
 # -----------------------------
-with tabs[10]:
+with tabs[11]:
     st.subheader("📤 Reporting Center")
     st.caption("Visual HTML reports and professional Excel workbooks containing the same decision-ready information.")
 
@@ -2541,7 +2887,32 @@ with tabs[10]:
                 f"{comparison_meta['worsened']} worsened / {comparison_meta['improved']} improved"
             )
 
-    st.markdown("### 4. Complete Management Pack")
+    st.markdown("### 4. Planning Agent")
+    pe1, pe2 = st.columns(2)
+    with pe1:
+        st.download_button(
+            "📊 Planning Agent Report (HTML)",
+            build_planning_agent_html(planning, planning_meta).encode("utf-8"),
+            "planning_agent_report.html",
+            "text/html",
+            use_container_width=True
+        )
+    with pe2:
+        try:
+            planning_export_xlsx = _excel_planning_agent_bytes(planning, planning_meta)
+        except Exception as planning_export_exc:
+            planning_export_xlsx = None
+            st.warning(f"Excel export unavailable: {planning_export_exc}")
+        if planning_export_xlsx:
+            st.download_button(
+                "📗 Planning Agent Report (Excel)",
+                planning_export_xlsx,
+                "planning_agent_report.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True
+            )
+
+    st.markdown("### 5. Complete Management Pack")
     p1, p2 = st.columns(2)
     with p1:
         st.download_button("📦 Management Pack (ZIP)", pack_bytes, "supply_chain_management_pack_v17.zip", "application/zip", use_container_width=True)
