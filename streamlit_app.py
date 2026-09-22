@@ -328,7 +328,7 @@ td{{padding:10px;border-bottom:1px solid var(--line);vertical-align:top}}
 <div class="header">
 <h1>{html_lib.escape(title)}</h1>
 <p>{html_lib.escape(subtitle)}</p>
-<div class="meta">Generated {generated} · Supply Chain AI Copilot V1.8.1</div>
+<div class="meta">Generated {generated} · Supply Chain AI Copilot V1.8.2</div>
 </div>
 {body}
 <div class="footer">Decision support only. Validate purchase execution and supplier commitments before release.</div>
@@ -861,16 +861,16 @@ def _xlsx_stream_build(kind, a, raw, dq, plan):
         top = a.sort_values("Decision_Score", ascending=False).head(10)
         _xlsx_write_df(ws, top, 8, 0,
                        ["SKU","Description","Supplier","Status","Action","Action_Timing","Recommended_Order","Purchase_Value","Days_Cover","Lead_Time_Days"],
-                       "ExecPriorities", formats={**fmt, "Purchase_Value": fmt["currency"], "Recommended_Order": fmt["integer"], "Days_Cover": fmt["number"], "Lead_Time_Days": fmt["number"]},
+                       wb, "ExecPriorities", formats={**fmt, "Purchase_Value": fmt["currency"], "Recommended_Order": fmt["integer"], "Days_Cover": fmt["number"], "Lead_Time_Days": fmt["number"]},
                        widths={"Description": 30})
         action_ws = wb.add_worksheet("Action Plan")
         _xlsx_title(action_ws, "Weekly Action Plan", "Planner-ready worklist.", wb, 9)
         _xlsx_write_df(action_ws, plan, 3, 0,
                        ["Priority","SKU","Description","Supplier","Action","Owner","Deadline","Reason","Confidence","Purchase_Value"],
-                       "ExecActionPlan", formats={**fmt, "Purchase_Value": fmt["currency"]}, widths={"Description":30,"Reason":34})
+                       wb, "ExecActionPlan", formats={**fmt, "Purchase_Value": fmt["currency"]}, widths={"Description":30,"Reason":34})
         dq_ws = wb.add_worksheet("Data Quality")
         _xlsx_title(dq_ws, "Data Quality", "Structural and consistency checks.", wb, 4)
-        _xlsx_write_df(dq_ws, dq, 3, 0, ["Category","Check","Status","Count","Details"], "ExecDQ", widths={"Check":30,"Details":42})
+        _xlsx_write_df(dq_ws, dq, 3, 0, ["Category","Check","Status","Count","Details"], wb, "ExecDQ", widths={"Check":30,"Details":42})
 
     elif kind == "detailed":
         fmt = _xlsx_base_formats(wb)
@@ -879,20 +879,20 @@ def _xlsx_stream_build(kind, a, raw, dq, plan):
         x = a.sort_values("Excess_Inventory_Value", ascending=False).head(20)
         _xlsx_write_df(inv, x, 3, 0,
                        ["SKU","Description","Supplier","Status","Days_Cover","Lead_Time_Days","Stock","Open_PO","Excess_Inventory_Qty","Excess_Inventory_Value","Service_Risk_Value"],
-                       "InventoryRisk", formats={**fmt, "Excess_Inventory_Value": fmt["currency"], "Service_Risk_Value": fmt["currency"]}, widths={"Description":30})
+                       wb, "InventoryRisk", formats={**fmt, "Excess_Inventory_Value": fmt["currency"], "Service_Risk_Value": fmt["currency"]}, widths={"Description":30})
         _xlsx_write_section_chart(inv, wb, "bar", "Excess inventory value", 0, 9, 4, min(3+len(x),13), "M4")
         pur = wb.add_worksheet("Purchase Plan")
         _xlsx_title(pur, "Purchase Plan", "Recommended replenishment by SKU and supplier.", wb, 10)
         x = a[a["Recommended_Order"] > 0].sort_values("Purchase_Value", ascending=False)
         _xlsx_write_df(pur, x, 3, 0,
                        ["SKU","Description","Supplier","Action","Recommended_Order","Unit_Cost","Purchase_Value","Days_Cover","Lead_Time_Days","Open_PO","PO_Adequacy"],
-                       "PurchasePlan", formats={**fmt, "Unit_Cost": fmt["currency"], "Purchase_Value": fmt["currency"], "Recommended_Order":fmt["integer"], "Open_PO":fmt["integer"]}, widths={"Description":30})
+                       wb, "PurchasePlan", formats={**fmt, "Unit_Cost": fmt["currency"], "Purchase_Value": fmt["currency"], "Recommended_Order":fmt["integer"], "Open_PO":fmt["integer"]}, widths={"Description":30})
         _xlsx_write_section_chart(pur, wb, "column", "Purchase value by SKU", 0, 6, 4, min(3+len(x),13), "M4")
         act = wb.add_worksheet("Action Plan")
         _xlsx_title(act, "Weekly Action Plan", "Owner, timing, reason and confidence.", wb, 9)
         _xlsx_write_df(act, plan, 3, 0,
                        ["Priority","SKU","Description","Supplier","Action","Owner","Deadline","Reason","Confidence","Purchase_Value"],
-                       "DetailedActionPlan", formats={**fmt, "Purchase_Value": fmt["currency"]}, widths={"Description":30,"Reason":34})
+                       wb, "DetailedActionPlan", formats={**fmt, "Purchase_Value": fmt["currency"]}, widths={"Description":30,"Reason":34})
         sup = wb.add_worksheet("Supplier Risk")
         _xlsx_title(sup, "Supplier Risk", "Risk concentration and economic exposure.", wb, 8)
         s = a.groupby("Supplier", as_index=False).agg(
@@ -905,11 +905,11 @@ def _xlsx_stream_build(kind, a, raw, dq, plan):
         s = s.sort_values("Supplier_Risk_Score", ascending=False)
         _xlsx_write_df(sup, s, 3, 0,
                        ["Supplier","SKUs","Critical","Review","Supplier_Risk_Score","Service_Risk_Value","Purchase_Value","Inventory_Value","Excess_Inventory_Value"],
-                       "SupplierRisk", formats={**fmt, "Service_Risk_Value":fmt["currency"],"Purchase_Value":fmt["currency"],"Inventory_Value":fmt["currency"],"Excess_Inventory_Value":fmt["currency"]}, widths={"Supplier":22})
+                       wb, "SupplierRisk", formats={**fmt, "Service_Risk_Value":fmt["currency"],"Purchase_Value":fmt["currency"],"Inventory_Value":fmt["currency"],"Excess_Inventory_Value":fmt["currency"]}, widths={"Supplier":22})
         _xlsx_write_section_chart(sup, wb, "column", "Supplier risk score", 0, 4, 4, min(3+len(s),13), "K4")
         dqs = wb.add_worksheet("Data Quality")
         _xlsx_title(dqs, "Data Quality", "Severity and counts for the current dataset.", wb, 4)
-        _xlsx_write_df(dqs, dq, 3, 0, ["Category","Check","Status","Count","Details"], "DetailedDQ", widths={"Check":30,"Details":42})
+        _xlsx_write_df(dqs, dq, 3, 0, ["Category","Check","Status","Count","Details"], wb, "DetailedDQ", widths={"Check":30,"Details":42})
 
     else:
         fmt = _xlsx_base_formats(wb)
@@ -922,7 +922,7 @@ def _xlsx_stream_build(kind, a, raw, dq, plan):
         top = a.sort_values("Decision_Score", ascending=False).head(10)
         _xlsx_write_df(ex, top, 8, 0,
                        ["SKU","Description","Supplier","Status","Action","Action_Timing","Recommended_Order","Purchase_Value"],
-                       "CompleteExec", formats={**fmt, "Purchase_Value":fmt["currency"],"Recommended_Order":fmt["integer"]}, widths={"Description":30})
+                       wb, "CompleteExec", formats={**fmt, "Purchase_Value":fmt["currency"],"Recommended_Order":fmt["integer"]}, widths={"Description":30})
 
         # Detailed sheets are included as part of the complete pack.
         inv = wb.add_worksheet("Inventory Risk")
@@ -930,20 +930,20 @@ def _xlsx_stream_build(kind, a, raw, dq, plan):
         x = a.sort_values("Excess_Inventory_Value", ascending=False).head(20)
         _xlsx_write_df(inv, x, 3, 0,
                        ["SKU","Description","Supplier","Status","Days_Cover","Lead_Time_Days","Stock","Open_PO","Excess_Inventory_Qty","Excess_Inventory_Value","Service_Risk_Value"],
-                       "CompleteInventoryRisk", formats={**fmt,"Excess_Inventory_Value":fmt["currency"],"Service_Risk_Value":fmt["currency"]}, widths={"Description":30})
+                       wb, "CompleteInventoryRisk", formats={**fmt,"Excess_Inventory_Value":fmt["currency"],"Service_Risk_Value":fmt["currency"]}, widths={"Description":30})
 
         pur = wb.add_worksheet("Purchase Plan")
         _xlsx_title(pur, "Purchase Plan", "Recommended replenishment by SKU and supplier.", wb, 10)
         x = a[a["Recommended_Order"] > 0].sort_values("Purchase_Value", ascending=False)
         _xlsx_write_df(pur, x, 3, 0,
                        ["SKU","Description","Supplier","Action","Recommended_Order","Unit_Cost","Purchase_Value","Days_Cover","Lead_Time_Days","Open_PO","PO_Adequacy"],
-                       "CompletePurchasePlan", formats={**fmt,"Unit_Cost":fmt["currency"],"Purchase_Value":fmt["currency"],"Recommended_Order":fmt["integer"],"Open_PO":fmt["integer"]}, widths={"Description":30})
+                       wb, "CompletePurchasePlan", formats={**fmt,"Unit_Cost":fmt["currency"],"Purchase_Value":fmt["currency"],"Recommended_Order":fmt["integer"],"Open_PO":fmt["integer"]}, widths={"Description":30})
 
         act = wb.add_worksheet("Action Plan")
         _xlsx_title(act, "Weekly Action Plan", "Owner, timing, reason and confidence.", wb, 9)
         _xlsx_write_df(act, plan, 3, 0,
                        ["Priority","SKU","Description","Supplier","Action","Owner","Deadline","Reason","Confidence","Purchase_Value"],
-                       "CompleteActionPlan", formats={**fmt,"Purchase_Value":fmt["currency"]}, widths={"Description":30,"Reason":34})
+                       wb, "CompleteActionPlan", formats={**fmt,"Purchase_Value":fmt["currency"]}, widths={"Description":30,"Reason":34})
 
         sup = wb.add_worksheet("Supplier Risk")
         _xlsx_title(sup, "Supplier Risk", "Risk concentration and economic exposure.", wb, 8)
@@ -957,15 +957,15 @@ def _xlsx_stream_build(kind, a, raw, dq, plan):
         s = s.sort_values("Supplier_Risk_Score", ascending=False)
         _xlsx_write_df(sup, s, 3, 0,
                        ["Supplier","SKUs","Critical","Review","Supplier_Risk_Score","Service_Risk_Value","Purchase_Value","Inventory_Value","Excess_Inventory_Value"],
-                       "CompleteSupplierRisk", formats={**fmt,"Service_Risk_Value":fmt["currency"],"Purchase_Value":fmt["currency"],"Inventory_Value":fmt["currency"],"Excess_Inventory_Value":fmt["currency"]}, widths={"Supplier":22})
+                       wb, "CompleteSupplierRisk", formats={**fmt,"Service_Risk_Value":fmt["currency"],"Purchase_Value":fmt["currency"],"Inventory_Value":fmt["currency"],"Excess_Inventory_Value":fmt["currency"]}, widths={"Supplier":22})
 
         dqs = wb.add_worksheet("Data Quality")
         _xlsx_title(dqs, "Data Quality", "Severity and counts for the current dataset.", wb, 4)
-        _xlsx_write_df(dqs, dq, 3, 0, ["Category","Check","Status","Count","Details"], "CompleteDQ", widths={"Check":30,"Details":42})
+        _xlsx_write_df(dqs, dq, 3, 0, ["Category","Check","Status","Count","Details"], wb, "CompleteDQ", widths={"Check":30,"Details":42})
 
         src_ws = wb.add_worksheet("Source Data")
         _xlsx_title(src_ws, "Source Data", "Normalized source dataset used by the decision engine.", wb, max(5, len(raw.columns)-1))
-        _xlsx_write_df(src_ws, raw, 3, 0, list(raw.columns), "CompleteSourceData")
+        _xlsx_write_df(src_ws, raw, 3, 0, list(raw.columns), wb, "CompleteSourceData")
 
     wb.close()
     return buf.getvalue()
@@ -1606,7 +1606,7 @@ a["Forecast_Change_Pct"] = np.where(
 # Header
 # -----------------------------
 st.title("📦 Supply Chain AI Copilot")
-st.caption("From raw supply-chain data to prioritized decisions · V1.8.1")
+st.caption("From raw supply-chain data to prioritized decisions · V1.8.2")
 
 c1,c2,c3,c4,c5,c6 = st.columns(6)
 c1.metric("SKUs", K["sku"])
