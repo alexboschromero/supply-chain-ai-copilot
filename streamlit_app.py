@@ -227,16 +227,34 @@ def analyze(df, safety_days=10, service_level=0.95):
     a["Lead_Time_Gap_Days"] = a["Days_Cover"] - a["Lead_Time_Days"]
     a["Stockout_Buffer_Days"] = a["Days_Cover"] - a["Lead_Time_Days"]
 
+    def status(r):
+        if r["Stock"] < r["Lead_Time_Demand"]:
+            return "🔴 CRITICAL"
+        if r["Stock"] < r["Required_Stock"]:
+            return "🟠 REVIEW"
+        if r["Days_Cover"] > r["Lead_Time_Days"] + safety_days*3:
+            return "🟡 EXCESS"
+        return "🟢 OK"
+
+    # Status MUST be created before any function reads r["Status"].
+    a["Status"] = a.apply(status, axis=1)
+
     def action(r):
         if r["Status"] == "🔴 CRITICAL":
             return "BUY_NOW"
         if r["Status"] == "🟠 REVIEW":
-            if r["Days_Cover"] <= r["Lead_Time_Days"] + 7:
+            # If an open PO exists, the operational action is to validate it
+            # before ordering another quantity.
+            if r["Open_PO"] > 0:
                 return "CONFIRM_PO"
+            if r["Days_Cover"] <= r["Lead_Time_Days"] + 7:
+                return "BUY_NOW"
             return "REVIEW"
         if r["Status"] == "🟡 EXCESS":
             return "DO_NOT_BUY"
         return "MONITOR"
+
+    a["Action"] = a.apply(action, axis=1)
 
     def timing(r):
         if r["Action"] == "BUY_NOW":
@@ -250,7 +268,6 @@ def analyze(df, safety_days=10, service_level=0.95):
         return "Monitor"
 
     def confidence(r):
-        # Confidence is intentionally transparent: based on demand history and data completeness.
         if r["Annual_Sales"] <= 0:
             return "LOW"
         if r["Demand_CV"] <= 0.25:
@@ -259,18 +276,6 @@ def analyze(df, safety_days=10, service_level=0.95):
             return "MEDIUM"
         return "LOW"
 
-    def status(r):
-        if r["Stock"] < r["Lead_Time_Demand"]:
-            return "🔴 CRITICAL"
-        if r["Stock"] < r["Required_Stock"]:
-            return "🟠 REVIEW"
-        if r["Days_Cover"] > r["Lead_Time_Days"] + safety_days*3:
-            return "🟡 EXCESS"
-        return "🟢 OK"
-
-    # Status must exist before Action() because Action() uses Status.
-    a["Status"] = a.apply(status, axis=1)
-    a["Action"] = a.apply(action, axis=1)
     a["Action_Timing"] = a.apply(timing, axis=1)
     a["Decision_Confidence"] = a.apply(confidence, axis=1)
 
@@ -631,7 +636,8 @@ with st.sidebar:
     )
 
     if st.button("🔄 Cargar demo"):
-        st.session_state.analysis = analyze(sample_data(), safety_days, service)
+        st.session_state.raw_data = sample_data()
+        st.session_state.analysis = analyze(st.session_state.raw_data, safety_days, service)
         st.session_state.chat = []
         st.rerun()
 
@@ -642,17 +648,19 @@ if "raw_data" not in st.session_state:
     st.session_state.raw_data = sample_data()
 
 if uploaded:
-    raw = read_uploaded(uploaded)
-    raw = normalize_columns(raw)
+    raw = normalize_columns(read_uploaded(uploaded))
     valid, error = validate(raw)
     if not valid:
         st.error(error)
         st.stop()
     st.session_state.raw_data = raw
     st.session_state.analysis = analyze(raw, safety_days, service)
-elif st.session_state.analysis is None:
-    st.session_state.analysis = analyze(sample_data(), safety_days, service)
 
+if st.session_state.analysis is None:
+    st.session_state.raw_data = st.session_state.raw_data.copy()
+    st.session_state.analysis = analyze(st.session_state.raw_data, safety_days, service)
+
+raw = st.session_state.raw_data
 a = st.session_state.analysis
 K = kpis(a)
 
@@ -667,7 +675,7 @@ a["Forecast_Change_Pct"] = np.where(
 # Header
 # -----------------------------
 st.title("📦 Supply Chain AI Copilot")
-st.caption("From raw supply-chain data to prioritized decisions · V1.4")
+st.caption("From raw supply-chain data to prioritized decisions · V1.4.1")
 
 c1,c2,c3,c4,c5,c6 = st.columns(6)
 c1.metric("SKUs", K["sku"])
@@ -832,7 +840,14 @@ with tabs[9]:
     st.subheader("📝 Weekly action plan")
     st.caption("Operational worklist created from the Decision Engine.")
     plan = build_action_plan(a)
-    st.dataframe(plan, use_container_width=True, hide_index=True)
+    st.dataframe(
+        plan[[
+            "Priority","SKU","Description","Supplier","Action",
+            "Owner","Deadline","Reason","Confidence","Purchase_Value"
+        ]],
+        use_container_width=True,
+        hide_index=True
+    )
 
     selected_sku = st.selectbox(
         "Generate supplier communication for SKU",
