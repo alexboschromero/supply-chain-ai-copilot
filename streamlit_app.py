@@ -157,6 +157,7 @@ def _change_reason(row):
         reasons.append(f"action changed {row['Previous_Action']} → {row['Current_Action']}")
     return "; ".join(reasons) if reasons else "No material decision change."
 
+@st.cache_data(show_spinner=False, max_entries=16)
 def build_period_comparison(raw, safety_days, service, current_period=None, previous_period=None):
     periods = _periods_from_raw(raw)
     meta = {
@@ -297,6 +298,7 @@ def agent_change_monitor_tool(comparison, meta=None):
         ]].round(2).to_dict("records")
     }
 
+@st.cache_data(show_spinner=False, max_entries=16)
 def data_quality_report(df):
     rows = []
     for col in REQUIRED:
@@ -387,6 +389,7 @@ def data_quality_summary(df, dq):
 
 
 
+@st.cache_data(show_spinner=False, max_entries=16)
 def build_planning_agent(a, comparison=None, comparison_meta=None):
     x = a.copy()
 
@@ -507,6 +510,7 @@ def agent_planning_tool(a, comparison=None, comparison_meta=None):
         ]].round(2).to_dict("records")
     }
 
+@st.cache_data(show_spinner=False, max_entries=16)
 def build_action_plan(a):
     x = a.sort_values("Decision_Score", ascending=False).copy()
     plan = []
@@ -659,7 +663,7 @@ _REPORT_TRANSLATIONS_ES = {
     "Planner-ready operational worklist with ownership and deadlines.":"Lista operativa preparada para el planner, con responsables y fechas límite.",
     "Supplier concentration, service exposure and purchasing exposure.":"Concentración de proveedores, exposición de servicio y exposición de compras.",
     "Generated":"Generado", "Decision support only. Validate purchase execution and supplier commitments before release.":"Solo para soporte a la decisión. Valida la ejecución de compras y los compromisos de los proveedores antes de su liberación.",
-    "Supply Chain AI Copilot V2.0.14":"Supply Chain AI Copilot V2.0.14",
+    "Supply Chain AI Copilot V2.0.17":"Supply Chain AI Copilot V2.0.17",
     "No comparable periods are available.":"No hay periodos comparables disponibles.",
 }
 
@@ -712,7 +716,7 @@ td{{padding:10px;border-bottom:1px solid var(--line);vertical-align:top}}
 <div class="header">
 <h1>{html_lib.escape(title)}</h1>
 <p>{html_lib.escape(subtitle)}</p>
-<div class="meta">Generated {generated} · Supply Chain AI Copilot V2.0.14</div>
+<div class="meta">Generated {generated} · Supply Chain AI Copilot V2.0.17</div>
 </div>
 {body}
 <div class="footer">Decision support only. Validate purchase execution and supplier commitments before release.</div>
@@ -1690,6 +1694,7 @@ def validate(df):
         return False, f"Faltan columnas obligatorias: {', '.join(missing)}"
     return True, ""
 
+@st.cache_data(show_spinner=False, max_entries=16)
 def analyze(df, safety_days=10, service_level=0.95):
     df = df.copy()
     for c in ["Sales","Stock","Open_PO","Lead_Time_Days","MOQ","Unit_Cost"]:
@@ -1849,6 +1854,7 @@ def analyze(df, safety_days=10, service_level=0.95):
     a["Data_Quality"] = np.where(a["Annual_Sales"] <= 0, "⚠️ No demand", "OK")
     return a
 
+@st.cache_data(show_spinner=False, max_entries=16)
 def build_logistics_dashboard(a, raw):
     """Build the KPI layer used by the Logistics Dashboard and its exports."""
     x = a.copy()
@@ -1979,6 +1985,7 @@ def build_logistics_dashboard(a, raw):
         },
     }
 
+@st.cache_data(show_spinner=False, max_entries=16)
 def kpis(a):
     return {
         "sku": len(a),
@@ -2546,6 +2553,14 @@ if "scenario_library" not in st.session_state:
     st.session_state.scenario_library = {}
 if "mrp_bom" not in st.session_state:
     st.session_state.mrp_bom = None
+if "scenario_result" not in st.session_state:
+    st.session_state.scenario_result = None
+if "scenario_result_signature" not in st.session_state:
+    st.session_state.scenario_result_signature = None
+if "report_bundle" not in st.session_state:
+    st.session_state.report_bundle = None
+if "report_signature" not in st.session_state:
+    st.session_state.report_signature = None
 
 
 # -----------------------------
@@ -2556,7 +2571,16 @@ if "language" not in st.session_state:
 
 _TRANSLATIONS = {
     "Spanish": {
-        "Decision Intelligence for planners · V2.0.14": "Inteligencia de decisiones para planners · V2.0.13",
+        "Performance": "Rendimiento",
+        "Large datasets are cached after the first calculation. Changing a planning parameter may trigger a recalculation.": "Los datasets grandes se almacenan en caché después del primer cálculo. Cambiar un parámetro de planificación puede activar un nuevo cálculo.",
+        "source rows": "filas de origen",
+        "Run scenario": "Ejecutar escenario",
+        "Running scenario analysis...": "Ejecutando análisis del escenario...",
+        "Adjust the parameters and click Run scenario to calculate the impact.": "Ajusta los parámetros y pulsa Ejecutar escenario para calcular el impacto.",
+        "Generate reports": "Generar informes",
+        "Generating reports...": "Generando informes...",
+        "Generate reports to create the HTML and Excel downloads. This avoids heavy report generation on every interaction.": "Genera los informes para crear las descargas HTML y Excel. Esto evita generar informes pesados en cada interacción.",
+        "Decision Intelligence for planners · V2.0.17": "Inteligencia de decisiones para planners · V2.0.17",
         "Historical demand and inventory": "Histórico de demanda e inventario",
         "Upload historical demand and inventory data for analysis. CSV and Excel are supported.": "Carga datos históricos de demanda e inventario para ejecutar el análisis. Se admiten CSV y Excel.",
         "Safety stock floor (days)": "Stock de seguridad mínimo (días)",
@@ -2887,8 +2911,8 @@ _TRANSLATIONS["Spanish"].update({
     "The MVP forecast uses a weighted average of the last 6 months plus a linear trend. The next iteration can add seasonality, intermittent demand and alternative models.": "El forecast del MVP utiliza una media ponderada de los últimos 6 meses más una tendencia lineal. La siguiente iteración puede añadir estacionalidad, demanda intermitente y modelos alternativos.",
     "HTML and Excel use the current filtered view. HTML includes KPIs and an executive presentation; Excel includes Summary, Action Plan and Supplier Summary with filters.": "HTML y Excel utilizan la vista filtrada actual. HTML incluye KPIs y una presentación ejecutiva; Excel incluye Summary, Action Plan y Supplier Summary con filtros.",
     "Need at least two historical periods to compare evolution.": "Se necesitan al menos dos periodos históricos para comparar la evolución.",
-    "📦 Supply Chain AI Copilot V2.0.14 — recommendations require planner validation before execution.": "📦 Supply Chain AI Copilot V2.0.14 — las recomendaciones requieren validación del planner antes de su ejecución.",
-    "Supply Chain AI Copilot V2.0.14 — recommendations require planner validation before execution.": "Supply Chain AI Copilot V2.0.14 — las recomendaciones requieren validación del planner antes de su ejecución.",
+    "📦 Supply Chain AI Copilot V2.0.17 — recommendations require planner validation before execution.": "📦 Supply Chain AI Copilot V2.0.17 — las recomendaciones requieren validación del planner antes de su ejecución.",
+    "Supply Chain AI Copilot V2.0.17 — recommendations require planner validation before execution.": "Supply Chain AI Copilot V2.0.17 — las recomendaciones requieren validación del planner antes de su ejecución.",
     "Safety stock floor": "Stock de seguridad mínimo", "Service level target": "Objetivo de nivel de servicio",
     "Language": "Idioma", "rows": "filas", "suppliers": "proveedores", "units": "unidades", "Fingerprint": "Huella",
     "Executive": "Ejecutivo", "Action Plan": "Plan de acción", "Data Quality": "Calidad de datos", "Inventory Risk": "Riesgo de inventario",
@@ -3036,7 +3060,7 @@ div[data-testid="stExpander"] { border-radius: 12px; }
 # -----------------------------
 with st.sidebar:
     st.markdown("## 📦 Supply Chain AI")
-    st.caption(tr("Decision Intelligence for planners · V2.0.14"))
+    st.caption(tr("Decision Intelligence for planners · V2.0.17"))
 
     language_choice = st.selectbox(f"🌐 {tr('Language')}", ["English", "Español"], index=0 if st.session_state.language == "English" else 1, key="language_selector")
     st.session_state.language = "English" if language_choice == "English" else "Spanish"
@@ -3120,7 +3144,8 @@ with st.sidebar:
 
     if st.button(tr("🔄 Load demo")):
         st.session_state.raw_data = sample_data()
-        st.session_state.analysis = analyze(st.session_state.raw_data, safety_days, service)
+        st.session_state.analysis = None
+        st.session_state.analysis_signature = None
         st.session_state.chat = []
         st.rerun()
 
@@ -3144,7 +3169,7 @@ def _excel_tab_export_bytes(title, sheets, kpis=None):
         summary = wb.add_worksheet(tr("Summary"))
         summary.hide_gridlines(2)
         summary.write(0, 0, title, title_fmt)
-        summary.write(1, 0, "Exported from Supply Chain AI Copilot V2.0.14", subtitle_fmt)
+        summary.write(1, 0, "Exported from Supply Chain AI Copilot V2.0.17", subtitle_fmt)
         if kpis:
             summary.write(3, 0, "Key metrics", header_fmt)
             for i, (label, value) in enumerate(kpis.items(), start=4):
@@ -3188,6 +3213,8 @@ def _excel_tab_export_bytes(title, sheets, kpis=None):
 # -----------------------------
 if "raw_data" not in st.session_state:
     st.session_state.raw_data = sample_data()
+if "analysis_signature" not in st.session_state:
+    st.session_state.analysis_signature = None
 
 if uploaded:
     raw = normalize_columns(read_uploaded(uploaded))
@@ -3196,13 +3223,16 @@ if uploaded:
         st.error(error)
         st.stop()
     st.session_state.raw_data = raw
-    st.session_state.analysis = analyze(raw, safety_days, service)
-
-if st.session_state.analysis is None:
-    st.session_state.raw_data = st.session_state.raw_data.copy()
-    st.session_state.analysis = analyze(st.session_state.raw_data, safety_days, service)
+    st.session_state.analysis = None
+    st.session_state.analysis_signature = None
 
 raw = st.session_state.raw_data
+analysis_signature = (float(safety_days), float(service), len(raw), tuple(raw.columns))
+if (st.session_state.get("analysis") is None or
+        st.session_state.get("analysis_signature") != analysis_signature):
+    st.session_state.analysis = analyze(raw, safety_days, service)
+    st.session_state.analysis_signature = analysis_signature
+
 a = st.session_state.analysis
 
 # Schema guard: Streamlit can keep session_state across code updates.
@@ -3349,6 +3379,10 @@ with st.sidebar:
         st.warning(f"{K['critical']:,} {tr('critical SKUs require attention.')}")
     else:
         st.success(tr("No critical SKUs under the current planning parameters."))
+
+    with st.expander(tr("⚡ Performance"), expanded=False):
+        st.caption(tr("Large datasets are cached after the first calculation. Changing a planning parameter may trigger a recalculation."))
+        st.caption(f"{len(raw):,} {tr('source rows')} · {raw['SKU'].nunique():,} {tr('SKUs')}")
 
     with st.expander(tr("⚙️ Planning assumptions")):
         st.caption(f"{tr('Safety stock floor')}: **{safety_days} {tr('days')}**")
@@ -3935,122 +3969,118 @@ with tabs[7]:
     else:
         st.caption(tr("No saved scenarios yet."))
 
-    # Build a deterministic scenario dataset. Demand volatility changes the
-    # dispersion around each SKU's mean, allowing a more realistic risk test.
-    sim = raw.copy()
-    numeric_cols = ["Sales", "Stock", "Open_PO", "Lead_Time_Days", "MOQ", "Unit_Cost"]
-    for col in numeric_cols:
-        sim[col] = pd.to_numeric(sim[col], errors="coerce").fillna(0)
+    scenario_signature = tuple(sorted(current_cfg.items()))
+    scenario_has_result = st.session_state.get("scenario_result_signature") == scenario_signature and st.session_state.get("scenario_result") is not None
+    if st.button(f"▶️ {tr('Run scenario')}", type="primary", use_container_width=True, key="run_policy_scenario"):
+        with st.spinner(tr("Running scenario analysis...")):
+            sim_a = _run_saved_scenario(raw, current_cfg)
+        st.session_state.scenario_result = sim_a
+        st.session_state.scenario_result_signature = scenario_signature
+        scenario_has_result = True
 
-    sim["Sales"] = sim["Sales"] * sim_demand
-    if sim_volatility != 1.0:
-        sku_mean = sim.groupby("SKU")["Sales"].transform("mean")
-        sim["Sales"] = (sku_mean + (sim["Sales"] - sku_mean) * sim_volatility).clip(lower=0)
-    sim["Stock"] = sim["Stock"] * sim_stock
-    sim["Open_PO"] = sim["Open_PO"] * sim_po
-    sim["Lead_Time_Days"] = sim["Lead_Time_Days"] * sim_lead + sim_lead_buffer
-    sim["MOQ"] = sim["MOQ"] * sim_moq
-    sim["Unit_Cost"] = sim["Unit_Cost"] * sim_cost
+    if not scenario_has_result:
+        st.info(tr("Adjust the parameters and click Run scenario to calculate the impact."))
+    else:
+        sim_a = st.session_state.scenario_result
 
-    sim_a = analyze(sim, sim_safety, sim_service)
-    base_val = float(a["Purchase_Value"].sum())
-    sim_val = float(sim_a["Purchase_Value"].sum())
-    base_risk = int((a["Status"] == "🔴 CRITICAL").sum())
-    sim_risk = int((sim_a["Status"] == "🔴 CRITICAL").sum())
-    base_service_risk = float(a["Service_Risk_Value"].sum())
-    sim_service_risk = float(sim_a["Service_Risk_Value"].sum())
-    base_excess = float(a["Excess_Inventory_Value"].sum())
-    sim_excess = float(sim_a["Excess_Inventory_Value"].sum())
-    base_required = float((a["Required_Stock"] * a["Unit_Cost"]).sum())
-    sim_required = float((sim_a["Required_Stock"] * sim_a["Unit_Cost"]).sum())
-    base_cover = float(a["Days_Cover"].replace([np.inf, -np.inf], np.nan).median())
-    sim_cover = float(sim_a["Days_Cover"].replace([np.inf, -np.inf], np.nan).median())
+    if scenario_has_result:
+        base_val = float(a["Purchase_Value"].sum())
+        sim_val = float(sim_a["Purchase_Value"].sum())
+        base_risk = int((a["Status"] == "🔴 CRITICAL").sum())
+        sim_risk = int((sim_a["Status"] == "🔴 CRITICAL").sum())
+        base_service_risk = float(a["Service_Risk_Value"].sum())
+        sim_service_risk = float(sim_a["Service_Risk_Value"].sum())
+        base_excess = float(a["Excess_Inventory_Value"].sum())
+        sim_excess = float(sim_a["Excess_Inventory_Value"].sum())
+        base_required = float((a["Required_Stock"] * a["Unit_Cost"]).sum())
+        sim_required = float((sim_a["Required_Stock"] * sim_a["Unit_Cost"]).sum())
+        base_cover = float(a["Days_Cover"].replace([np.inf, -np.inf], np.nan).median())
+        sim_cover = float(sim_a["Days_Cover"].replace([np.inf, -np.inf], np.nan).median())
 
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric(tr("Purchase need"), f"€{sim_val:,.0f}", f"€{sim_val-base_val:+,.0f}")
-    m2.metric(tr("Critical SKUs"), sim_risk, f"{sim_risk-base_risk:+d}")
-    m3.metric(tr("Service risk"), f"€{sim_service_risk:,.0f}", f"€{sim_service_risk-base_service_risk:+,.0f}")
-    m4.metric(tr("Required stock value"), f"€{sim_required:,.0f}", f"€{sim_required-base_required:+,.0f}")
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric(tr("Purchase need"), f"€{sim_val:,.0f}", f"€{sim_val-base_val:+,.0f}")
+        m2.metric(tr("Critical SKUs"), sim_risk, f"{sim_risk-base_risk:+d}")
+        m3.metric(tr("Service risk"), f"€{sim_service_risk:,.0f}", f"€{sim_service_risk-base_service_risk:+,.0f}")
+        m4.metric(tr("Required stock value"), f"€{sim_required:,.0f}", f"€{sim_required-base_required:+,.0f}")
 
-    st.markdown(f"**{tr('Scenario impact')}**")
-    impact = pd.DataFrame([
-        [tr("Purchase need"), base_val, sim_val, sim_val-base_val],
-        [tr("Critical SKUs"), base_risk, sim_risk, sim_risk-base_risk],
-        [tr("Service risk"), base_service_risk, sim_service_risk, sim_service_risk-base_service_risk],
-        [tr("Excess inventory"), base_excess, sim_excess, sim_excess-base_excess],
-        [tr("Required stock value"), base_required, sim_required, sim_required-base_required],
-        [tr("Median days cover"), base_cover, sim_cover, sim_cover-base_cover],
-    ], columns=[tr("Metric"), tr("Current policy"), tr("Scenario"), tr("Change")])
-    st.dataframe(impact, use_container_width=True, hide_index=True)
+        st.markdown(f"**{tr('Scenario impact')}**")
+        impact = pd.DataFrame([
+            [tr("Purchase need"), base_val, sim_val, sim_val-base_val],
+            [tr("Critical SKUs"), base_risk, sim_risk, sim_risk-base_risk],
+            [tr("Service risk"), base_service_risk, sim_service_risk, sim_service_risk-base_service_risk],
+            [tr("Excess inventory"), base_excess, sim_excess, sim_excess-base_excess],
+            [tr("Required stock value"), base_required, sim_required, sim_required-base_required],
+            [tr("Median days cover"), base_cover, sim_cover, sim_cover-base_cover],
+        ], columns=[tr("Metric"), tr("Current policy"), tr("Scenario"), tr("Change")])
+        st.dataframe(impact, use_container_width=True, hide_index=True)
 
-    st.markdown(f"**{tr('Scenario decision impact')}**")
-    scenario_view = sim_a[[
-        "SKU","Description","Supplier","Status","Action","Days_Cover",
-        "Lead_Time_Days","Recommended_Order","Purchase_Value",
-        "Service_Risk_Value","Excess_Inventory_Value","Decision_Confidence"
-    ]].copy().sort_values(["Status","Purchase_Value"], ascending=[True, False])
-    st.dataframe(scenario_view.head(100), use_container_width=True, hide_index=True)
+        st.markdown(f"**{tr('Scenario decision impact')}**")
+        scenario_view = sim_a[[
+            "SKU","Description","Supplier","Status","Action","Days_Cover",
+            "Lead_Time_Days","Recommended_Order","Purchase_Value",
+            "Service_Risk_Value","Excess_Inventory_Value","Decision_Confidence"
+        ]].copy().sort_values(["Status","Purchase_Value"], ascending=[True, False])
+        st.dataframe(scenario_view.head(100), use_container_width=True, hide_index=True)
 
-    base_actions = a.set_index("SKU")["Action"].to_dict()
-    changed_actions = int(sum(base_actions.get(sku) != action for sku, action in zip(sim_a["SKU"], sim_a["Action"])))
-    c1, c2, c3 = st.columns(3)
-    c1.metric(tr("Action changes"), changed_actions)
-    c2.metric(tr("Excess inventory"), f"€{sim_excess:,.0f}", f"€{sim_excess-base_excess:+,.0f}")
-    c3.metric(tr("Median days cover"), f"{sim_cover:.1f} d", f"{sim_cover-base_cover:+.1f} d")
+        base_actions = a.set_index("SKU")["Action"].to_dict()
+        changed_actions = int(sum(base_actions.get(sku) != action for sku, action in zip(sim_a["SKU"], sim_a["Action"])))
+        c1, c2, c3 = st.columns(3)
+        c1.metric(tr("Action changes"), changed_actions)
+        c2.metric(tr("Excess inventory"), f"€{sim_excess:,.0f}", f"€{sim_excess-base_excess:+,.0f}")
+        c3.metric(tr("Median days cover"), f"{sim_cover:.1f} d", f"{sim_cover-base_cover:+.1f} d")
 
-    st.info(tr("Scenario results are simulations only. Validate the impact before changing the live planning policy."))
+        st.info(tr("Scenario results are simulations only. Validate the impact before changing the live planning policy."))
 
 
-def _excel_data_quality_bytes(raw, dq):
-    if xlsxwriter is None:
-        raise RuntimeError("XlsxWriter is not available. Add XlsxWriter to requirements.txt and redeploy.")
-    buf = io.BytesIO()
-    wb = xlsxwriter.Workbook(buf, {"in_memory": True})
-    title = wb.add_format({"bold": True, "font_size": 18, "font_color": "#FFFFFF", "bg_color": "#17365D", "align": "left", "valign": "vcenter"})
-    subtitle = wb.add_format({"italic": True, "font_color": "#666666"})
-    header = wb.add_format({"bold": True, "font_color": "#FFFFFF", "bg_color": "#17365D", "align": "center", "valign": "vcenter", "text_wrap": True})
-    ok_fmt = wb.add_format({"font_color": "#166534", "bg_color": "#DCFCE7"})
-    warn_fmt = wb.add_format({"font_color": "#92400E", "bg_color": "#FEF3C7"})
-    crit_fmt = wb.add_format({"font_color": "#991B1B", "bg_color": "#FEE2E2"})
-    text_fmt = wb.add_format({"valign": "top", "text_wrap": True})
-    integer_fmt = wb.add_format({"num_format": "#,##0", "valign": "top"})
+    def _excel_data_quality_bytes(raw, dq):
+        if xlsxwriter is None:
+            raise RuntimeError("XlsxWriter is not available. Add XlsxWriter to requirements.txt and redeploy.")
+        buf = io.BytesIO()
+        wb = xlsxwriter.Workbook(buf, {"in_memory": True})
+        title = wb.add_format({"bold": True, "font_size": 18, "font_color": "#FFFFFF", "bg_color": "#17365D", "align": "left", "valign": "vcenter"})
+        subtitle = wb.add_format({"italic": True, "font_color": "#666666"})
+        header = wb.add_format({"bold": True, "font_color": "#FFFFFF", "bg_color": "#17365D", "align": "center", "valign": "vcenter", "text_wrap": True})
+        ok_fmt = wb.add_format({"font_color": "#166534", "bg_color": "#DCFCE7"})
+        warn_fmt = wb.add_format({"font_color": "#92400E", "bg_color": "#FEF3C7"})
+        crit_fmt = wb.add_format({"font_color": "#991B1B", "bg_color": "#FEE2E2"})
+        text_fmt = wb.add_format({"valign": "top", "text_wrap": True})
+        integer_fmt = wb.add_format({"num_format": "#,##0", "valign": "top"})
 
-    summary = data_quality_summary(raw, dq)
-    ws = wb.add_worksheet(tr("Summary"))
-    ws.hide_gridlines(2)
-    ws.merge_range("A1:F1", "Supply Chain AI — Data Quality Report", title)
-    ws.write("A2", f"Latest period: {summary['latest_period']} · {summary['rows']:,} rows · {summary['skus']:,} SKUs · {summary['suppliers']:,} suppliers", subtitle)
-    kpis = [("Rows", summary["rows"]), ("SKUs", summary["skus"]), ("Suppliers", summary["suppliers"]), ("Checks", summary["checks"]), ("Warnings", summary["warnings"]), ("Critical", summary["critical"])]
-    for i, (label, value) in enumerate(kpis):
-        col = i % 3 * 2
-        row = 3 + (i // 3) * 2
-        ws.write(row, col, label, header)
-        ws.write(row + 1, col, value, integer_fmt)
-        ws.set_column(col, col, 18)
-        ws.set_column(col + 1, col + 1, 3)
-    status_text = "ALL CHECKS PASSED" if summary["critical"] == 0 and summary["warnings"] == 0 else ("CRITICAL ISSUES DETECTED" if summary["critical"] > 0 else "WARNINGS DETECTED")
-    status_fmt = crit_fmt if summary["critical"] > 0 else (warn_fmt if summary["warnings"] > 0 else ok_fmt)
-    ws.write(8, 0, status_text, status_fmt)
-    ws.merge_range(8, 0, 8, 5, status_text, status_fmt)
-    ws.set_row(8, 24)
+        summary = data_quality_summary(raw, dq)
+        ws = wb.add_worksheet(tr("Summary"))
+        ws.hide_gridlines(2)
+        ws.merge_range("A1:F1", "Supply Chain AI — Data Quality Report", title)
+        ws.write("A2", f"Latest period: {summary['latest_period']} · {summary['rows']:,} rows · {summary['skus']:,} SKUs · {summary['suppliers']:,} suppliers", subtitle)
+        kpis = [("Rows", summary["rows"]), ("SKUs", summary["skus"]), ("Suppliers", summary["suppliers"]), ("Checks", summary["checks"]), ("Warnings", summary["warnings"]), ("Critical", summary["critical"])]
+        for i, (label, value) in enumerate(kpis):
+            col = i % 3 * 2
+            row = 3 + (i // 3) * 2
+            ws.write(row, col, label, header)
+            ws.write(row + 1, col, value, integer_fmt)
+            ws.set_column(col, col, 18)
+            ws.set_column(col + 1, col + 1, 3)
+        status_text = "ALL CHECKS PASSED" if summary["critical"] == 0 and summary["warnings"] == 0 else ("CRITICAL ISSUES DETECTED" if summary["critical"] > 0 else "WARNINGS DETECTED")
+        status_fmt = crit_fmt if summary["critical"] > 0 else (warn_fmt if summary["warnings"] > 0 else ok_fmt)
+        ws.write(8, 0, status_text, status_fmt)
+        ws.merge_range(8, 0, 8, 5, status_text, status_fmt)
+        ws.set_row(8, 24)
 
-    detail = wb.add_worksheet(tr("Quality Checks"))
-    detail.hide_gridlines(2)
-    detail.write_row(0, 0, ["Category", "Check", "Status", "Count", "Details"], header)
-    for r, row in enumerate(dq[["Category","Check","Status","Count","Details"]].itertuples(index=False, name=None), 1):
-        detail.write(r, 0, row[0], text_fmt)
-        detail.write(r, 1, row[1], text_fmt)
-        fmt = crit_fmt if row[2] == "CRITICAL" else (warn_fmt if row[2] == "WARNING" else ok_fmt)
-        detail.write(r, 2, row[2], fmt)
-        detail.write(r, 3, 0 if pd.isna(row[3]) else row[3], integer_fmt)
-        detail.write(r, 4, row[4], text_fmt)
-    detail.add_table(0, 0, len(dq), 4, {"name": "DataQualityChecks", "style": "Table Style Medium 2", "columns": [{"header": c} for c in ["Category","Check","Status","Count","Details"]]})
-    detail.set_column("A:A", 18); detail.set_column("B:B", 32); detail.set_column("C:C", 14); detail.set_column("D:D", 12); detail.set_column("E:E", 60)
-    detail.freeze_panes(1, 0)
-    wb.close()
-    buf.seek(0)
-    return buf.getvalue()
-
+        detail = wb.add_worksheet(tr("Quality Checks"))
+        detail.hide_gridlines(2)
+        detail.write_row(0, 0, ["Category", "Check", "Status", "Count", "Details"], header)
+        for r, row in enumerate(dq[["Category","Check","Status","Count","Details"]].itertuples(index=False, name=None), 1):
+            detail.write(r, 0, row[0], text_fmt)
+            detail.write(r, 1, row[1], text_fmt)
+            fmt = crit_fmt if row[2] == "CRITICAL" else (warn_fmt if row[2] == "WARNING" else ok_fmt)
+            detail.write(r, 2, row[2], fmt)
+            detail.write(r, 3, 0 if pd.isna(row[3]) else row[3], integer_fmt)
+            detail.write(r, 4, row[4], text_fmt)
+        detail.add_table(0, 0, len(dq), 4, {"name": "DataQualityChecks", "style": "Table Style Medium 2", "columns": [{"header": c} for c in ["Category","Check","Status","Count","Details"]]})
+        detail.set_column("A:A", 18); detail.set_column("B:B", 32); detail.set_column("C:C", 14); detail.set_column("D:D", 12); detail.set_column("E:E", 60)
+        detail.freeze_panes(1, 0)
+        wb.close()
+        buf.seek(0)
+        return buf.getvalue()
 
 
 # -----------------------------
@@ -4499,7 +4529,17 @@ with tabs[13]:
     st.subheader("📤 Reporting Center")
     st.caption(tr("Visual HTML reports and professional Excel workbooks containing the same decision-ready information."))
 
-    pack_bytes, report_map = build_management_pack(a, raw, dq, plan, comparison, comparison_meta)
+    report_signature = (
+        st.session_state.get("language", "English"),
+        len(a),
+        float(a["Purchase_Value"].sum()),
+        float(a["Service_Risk_Value"].sum()),
+        float(a["Excess_Inventory_Value"].sum()),
+        tuple(sorted(comparison_meta.items())) if isinstance(comparison_meta, dict) else str(comparison_meta),
+    )
+    if st.session_state.get("report_signature") != report_signature:
+        st.session_state.report_bundle = None
+        st.session_state.report_signature = None
 
     r1, r2, r3, r4 = st.columns(4)
     r1.metric("Purchase requirement", f"€{a['Purchase_Value'].sum():,.0f}")
@@ -4509,116 +4549,140 @@ with tabs[13]:
 
     excel_exec = excel_detail = excel_complete = None
     excel_error = None
-    try:
-        excel_exec = _excel_export_bytes("executive", a, raw, dq, plan, comparison, comparison_meta)
-        excel_detail = _excel_export_bytes("detailed", a, raw, dq, plan, comparison, comparison_meta)
-        excel_complete = _excel_export_bytes("complete", a, raw, dq, plan, comparison, comparison_meta)
-    except Exception as e:
-        excel_error = str(e)
+    if st.button(f"⚙️ {tr('Generate reports')}", type="primary", use_container_width=True, key="generate_management_reports"):
+        with st.spinner(tr("Generating reports...")):
+            try:
+                pack_bytes, report_map = build_management_pack(a, raw, dq, plan, comparison, comparison_meta)
+                excel_exec = _excel_export_bytes("executive", a, raw, dq, plan, comparison, comparison_meta)
+                excel_detail = _excel_export_bytes("detailed", a, raw, dq, plan, comparison, comparison_meta)
+                excel_complete = _excel_export_bytes("complete", a, raw, dq, plan, comparison, comparison_meta)
+                st.session_state.report_bundle = {
+                    "pack_bytes": pack_bytes, "report_map": report_map,
+                    "excel_exec": excel_exec, "excel_detail": excel_detail, "excel_complete": excel_complete,
+                    "excel_error": None,
+                }
+                st.session_state.report_signature = report_signature
+            except Exception as e:
+                st.session_state.report_bundle = {"pack_bytes": None, "report_map": {}, "excel_exec": None, "excel_detail": None, "excel_complete": None, "excel_error": str(e)}
+                st.session_state.report_signature = report_signature
 
-    st.markdown("### 1. Executive Report")
-    c1, c2 = st.columns(2)
-    with c1:
-        st.download_button(
-            "📊 Executive Report (HTML)",
-            report_map["01_Executive_Report.html"].encode("utf-8"),
-            "supply_chain_executive_report.html",
-            "text/html", use_container_width=True
-        )
-    with c2:
-        if excel_exec:
-            st.download_button(
-                "📗 Executive Report (Excel)",
-                excel_exec,
-                "supply_chain_executive_report.xlsx",
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True
-            )
-    st.caption("Same executive KPIs and priorities, with editable tables, formatting and charts in Excel.")
+    bundle = st.session_state.get("report_bundle")
+    if bundle and st.session_state.get("report_signature") == report_signature:
+        pack_bytes = bundle.get("pack_bytes")
+        report_map = bundle.get("report_map", {})
+        excel_exec = bundle.get("excel_exec")
+        excel_detail = bundle.get("excel_detail")
+        excel_complete = bundle.get("excel_complete")
+        excel_error = bundle.get("excel_error")
+    else:
+        pack_bytes = None
+        report_map = {}
 
-    st.markdown(tr("### 2. Detailed visual reports"))
-    d1, d2 = st.columns(2)
-    with d1:
-        st.download_button("📊 Inventory & Service Risk (HTML)", report_map["02_Inventory_Risk_Report.html"].encode("utf-8"), "inventory_service_risk_report.html", "text/html", use_container_width=True)
-        st.download_button("🛒 Purchase Plan (HTML)", report_map["03_Purchase_Plan_Report.html"].encode("utf-8"), "purchase_plan_report.html", "text/html", use_container_width=True)
-        st.download_button("🚚 Supplier Risk (HTML)", report_map["05_Supplier_Risk_Report.html"].encode("utf-8"), "supplier_risk_report.html", "text/html", use_container_width=True)
-    with d2:
-        st.download_button("📝 Weekly Action Plan (HTML)", report_map["04_Action_Plan_Report.html"].encode("utf-8"), "weekly_action_plan_report.html", "text/html", use_container_width=True)
-        st.download_button("🧹 Data Quality (HTML)", report_map["06_Data_Quality_Report.html"].encode("utf-8"), "data_quality_report.html", "text/html", use_container_width=True)
-        if excel_detail:
+    if not report_map:
+        st.info(tr("Generate reports to create the HTML and Excel downloads. This avoids heavy report generation on every interaction."))
+    else:
+        st.markdown("### 1. Executive Report")
+        c1, c2 = st.columns(2)
+        with c1:
             st.download_button(
-                "📗 Detailed Reports (Excel)",
-                excel_detail,
-                "supply_chain_detailed_reports.xlsx",
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True
-            )
-    st.caption("The Excel workbook mirrors the detailed reports and adds a Change Monitor sheet.")
-
-    if "07_Change_Monitor_Report.html" in report_map:
-        st.markdown("### 3. Change Monitor")
-        cm1, cm2 = st.columns(2)
-        with cm1:
-            st.download_button(
-                "🔄 Change Monitor Report (HTML)",
-                report_map["07_Change_Monitor_Report.html"].encode("utf-8"),
-                "change_monitor_report.html",
+                "📊 Executive Report (HTML)",
+                report_map["01_Executive_Report.html"].encode("utf-8"),
+                "supply_chain_executive_report.html",
                 "text/html", use_container_width=True
             )
-        with cm2:
-            st.metric(
-                "Changes",
-                comparison_meta["action_changes"],
-                f"{comparison_meta['worsened']} worsened / {comparison_meta['improved']} improved"
-            )
+        with c2:
+            if excel_exec:
+                st.download_button(
+                    "📗 Executive Report (Excel)",
+                    excel_exec,
+                    "supply_chain_executive_report.xlsx",
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True
+                )
+        st.caption("Same executive KPIs and priorities, with editable tables, formatting and charts in Excel.")
 
-    st.markdown("### 4. Planning Agent")
-    pe1, pe2 = st.columns(2)
-    with pe1:
-        st.download_button(
-            "📊 Planning Agent Report (HTML)",
-            build_planning_agent_html(planning, planning_meta).encode("utf-8"),
-            "planning_agent_report.html",
-            "text/html",
-            use_container_width=True,
-                key="planning_agent_html_export"
-        )
-    with pe2:
-        try:
-            planning_export_xlsx = _excel_planning_agent_bytes(planning, planning_meta)
-        except Exception as planning_export_exc:
-            planning_export_xlsx = None
-            st.warning(f"{tr('Excel export unavailable')}: {planning_export_exc}")
-        if planning_export_xlsx:
+        st.markdown(tr("### 2. Detailed visual reports"))
+        d1, d2 = st.columns(2)
+        with d1:
+            st.download_button("📊 Inventory & Service Risk (HTML)", report_map["02_Inventory_Risk_Report.html"].encode("utf-8"), "inventory_service_risk_report.html", "text/html", use_container_width=True)
+            st.download_button("🛒 Purchase Plan (HTML)", report_map["03_Purchase_Plan_Report.html"].encode("utf-8"), "purchase_plan_report.html", "text/html", use_container_width=True)
+            st.download_button("🚚 Supplier Risk (HTML)", report_map["05_Supplier_Risk_Report.html"].encode("utf-8"), "supplier_risk_report.html", "text/html", use_container_width=True)
+        with d2:
+            st.download_button("📝 Weekly Action Plan (HTML)", report_map["04_Action_Plan_Report.html"].encode("utf-8"), "weekly_action_plan_report.html", "text/html", use_container_width=True)
+            st.download_button("🧹 Data Quality (HTML)", report_map["06_Data_Quality_Report.html"].encode("utf-8"), "data_quality_report.html", "text/html", use_container_width=True)
+            if excel_detail:
+                st.download_button(
+                    "📗 Detailed Reports (Excel)",
+                    excel_detail,
+                    "supply_chain_detailed_reports.xlsx",
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True
+                )
+        st.caption("The Excel workbook mirrors the detailed reports and adds a Change Monitor sheet.")
+
+        if "07_Change_Monitor_Report.html" in report_map:
+            st.markdown("### 3. Change Monitor")
+            cm1, cm2 = st.columns(2)
+            with cm1:
+                st.download_button(
+                    "🔄 Change Monitor Report (HTML)",
+                    report_map["07_Change_Monitor_Report.html"].encode("utf-8"),
+                    "change_monitor_report.html",
+                    "text/html", use_container_width=True
+                )
+            with cm2:
+                st.metric(
+                    "Changes",
+                    comparison_meta["action_changes"],
+                    f"{comparison_meta['worsened']} worsened / {comparison_meta['improved']} improved"
+                )
+
+        st.markdown("### 4. Planning Agent")
+        pe1, pe2 = st.columns(2)
+        with pe1:
             st.download_button(
-                "📗 Planning Agent Report (Excel)",
-                planning_export_xlsx,
-                "planning_agent_report.xlsx",
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                "📊 Planning Agent Report (HTML)",
+                build_planning_agent_html(planning, planning_meta).encode("utf-8"),
+                "planning_agent_report.html",
+                "text/html",
                 use_container_width=True,
-                key="planning_agent_excel_export"
+                    key="planning_agent_html_export"
             )
+        with pe2:
+            try:
+                planning_export_xlsx = _excel_planning_agent_bytes(planning, planning_meta)
+            except Exception as planning_export_exc:
+                planning_export_xlsx = None
+                st.warning(f"{tr('Excel export unavailable')}: {planning_export_exc}")
+            if planning_export_xlsx:
+                st.download_button(
+                    "📗 Planning Agent Report (Excel)",
+                    planning_export_xlsx,
+                    "planning_agent_report.xlsx",
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
+                    key="planning_agent_excel_export"
+                )
 
-    st.markdown("### 5. Complete Management Pack")
-    p1, p2 = st.columns(2)
-    with p1:
-        st.download_button("📦 Management Pack (ZIP)", pack_bytes, "supply_chain_management_pack_v17.zip", "application/zip", use_container_width=True)
-    with p2:
-        if excel_complete:
-            st.download_button(
-                "📗 Complete Management Pack (Excel)",
-                excel_complete,
-                "supply_chain_complete_management_pack.xlsx",
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True
-            )
-    st.caption("The Excel pack combines the executive dashboard, detailed report sheets, Change Monitor and normalized source data in one workbook.")
+        st.markdown("### 5. Complete Management Pack")
+        p1, p2 = st.columns(2)
+        with p1:
+            st.download_button("📦 Management Pack (ZIP)", pack_bytes, "supply_chain_management_pack_v18.zip", "application/zip", use_container_width=True)
+        with p2:
+            if excel_complete:
+                st.download_button(
+                    "📗 Complete Management Pack (Excel)",
+                    excel_complete,
+                    "supply_chain_complete_management_pack.xlsx",
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True
+                )
+        st.caption("The Excel pack combines the executive dashboard, detailed report sheets, Change Monitor and normalized source data in one workbook.")
 
-    if excel_error:
-        st.warning(f"{tr('Excel export unavailable')}: {excel_error}")
+        if excel_error:
+            st.warning(f"{tr('Excel export unavailable')}: {excel_error}")
 
-    st.info("Raw CSV exports remain removed from the reporting workflow. HTML and Excel are now the primary shareable outputs.")
-
+        st.info("Raw CSV exports remain removed from the reporting workflow. HTML and Excel are now the primary shareable outputs.")
 
 st.divider()
-st.caption(tr("Supply Chain AI Copilot V2.0.14 — recommendations require planner validation before execution."))
+st.caption(tr("Supply Chain AI Copilot V2.0.17 — recommendations require planner validation before execution."))
