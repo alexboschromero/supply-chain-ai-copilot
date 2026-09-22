@@ -81,6 +81,222 @@ def normalize_columns(df):
             rename[c] = aliases[key]
     return df.rename(columns=rename)
 
+
+def _periods_from_raw(raw):
+    if not all(c in raw.columns for c in ["Year","Month"]):
+        return []
+    tmp = raw[["Year","Month"]].copy()
+    tmp["Year"] = pd.to_numeric(tmp["Year"], errors="coerce")
+    tmp["Month"] = pd.to_numeric(tmp["Month"], errors="coerce")
+    tmp = tmp.dropna().drop_duplicates().sort_values(["Year","Month"])
+    return [f"{int(r.Year)}-{int(r.Month):02d}" for _, r in tmp.iterrows()]
+
+def _period_tuple(period_text):
+    y, m = str(period_text).split("-")
+    return int(y), int(m)
+
+def _period_cutoff_mask(raw, period_text):
+    y, m = _period_tuple(period_text)
+    years = pd.to_numeric(raw["Year"], errors="coerce")
+    months = pd.to_numeric(raw["Month"], errors="coerce")
+    return (years < y) | ((years == y) & (months <= m))
+
+def _period_exact_mask(raw, period_text):
+    y, m = _period_tuple(period_text)
+    years = pd.to_numeric(raw["Year"], errors="coerce")
+    months = pd.to_numeric(raw["Month"], errors="coerce")
+    return (years == y) & (months == m)
+
+def _snapshot_for_period(raw, period_text):
+    x = raw[_period_exact_mask(raw, period_text)].copy()
+    if x.empty:
+        return pd.DataFrame(columns=["SKU","Description","Supplier","Sales_Actual","Stock_Actual","Open_PO_Actual"])
+    x = x.sort_values(["SKU"])
+    return x.groupby("SKU", as_index=False).agg(
+        Description=("Description","first"),
+        Supplier=("Supplier","first"),
+        Sales_Actual=("Sales","sum"),
+        Stock_Actual=("Stock","last"),
+        Open_PO_Actual=("Open_PO","last"),
+    )
+
+def _safe_pct_delta(current, previous):
+    current = np.asarray(pd.to_numeric(current, errors="coerce"), dtype=float)
+    previous = np.asarray(pd.to_numeric(previous, errors="coerce"), dtype=float)
+    return np.where(
+        np.abs(previous) > 1e-9,
+        (current - previous) / np.abs(previous) * 100,
+        np.where(np.abs(current) > 1e-9, 100.0, 0.0)
+    )
+
+def _change_classification(row):
+    worsen = 0
+    improve = 0
+    if row["Service_Risk_Delta"] > 0: worsen += 2
+    elif row["Service_Risk_Delta"] < 0: improve += 2
+    if row["Purchase_Value_Delta"] > 0: worsen += 1
+    elif row["Purchase_Value_Delta"] < 0: improve += 1
+    if row["Days_Cover_Delta"] < -1: worsen += 1
+    elif row["Days_Cover_Delta"] > 1: improve += 1
+    if row["Current_Action"] == "BUY_NOW" and row["Previous_Action"] != "BUY_NOW": worsen += 2
+    elif row["Previous_Action"] == "BUY_NOW" and row["Current_Action"] != "BUY_NOW": improve += 2
+    if worsen >= 3: return "WORSENED"
+    if improve >= 3: return "IMPROVED"
+    if worsen == 2 or improve == 2: return "WATCH"
+    return "STABLE"
+
+def _change_reason(row):
+    reasons = []
+    if row["Service_Risk_Delta"] > 0: reasons.append("service risk increased")
+    elif row["Service_Risk_Delta"] < 0: reasons.append("service risk decreased")
+    if row["Days_Cover_Delta"] < -1: reasons.append("coverage fell")
+    elif row["Days_Cover_Delta"] > 1: reasons.append("coverage improved")
+    if row["Purchase_Value_Delta"] > 0: reasons.append("purchase exposure increased")
+    elif row["Purchase_Value_Delta"] < 0: reasons.append("purchase exposure decreased")
+    if row["Action_Changed"]:
+        reasons.append(f"action changed {row['Previous_Action']} → {row['Current_Action']}")
+    return "; ".join(reasons) if reasons else "No material decision change."
+
+def build_period_comparison(raw, safety_days, service, current_period=None, previous_period=None):
+    periods = _periods_from_raw(raw)
+    meta = {
+        "available_periods": periods, "current_period": current_period, "previous_period": previous_period,
+        "has_comparison": False, "purchase_delta": 0.0, "purchase_delta_pct": 0.0,
+        "service_risk_delta": 0.0, "service_risk_delta_pct": 0.0,
+        "excess_delta": 0.0, "excess_delta_pct": 0.0, "critical_delta": 0,
+        "action_changes": 0, "worsened": 0, "improved": 0, "watch": 0,
+        "purchase_current": 0.0, "service_risk_current": 0.0, "excess_current": 0.0,
+    }
+    if len(periods) < 2:
+        return pd.DataFrame(), None, None, meta
+    if current_period not in periods:
+        current_period = periods[-1]
+    current_idx = periods.index(current_period)
+    valid_previous = periods[:current_idx]
+    if not valid_previous:
+        return pd.DataFrame(), None, None, meta
+    if previous_period not in valid_previous:
+        previous_period = valid_previous[-1]
+
+    raw_current = raw[_period_cutoff_mask(raw, current_period)].copy()
+    raw_previous = raw[_period_cutoff_mask(raw, previous_period)].copy()
+    current_a = analyze(raw_current, safety_days, service)
+    previous_a = analyze(raw_previous, safety_days, service)
+
+    cols = ["SKU","Status","Action","Days_Cover","Recommended_Order","Purchase_Value",
+            "Service_Risk_Value","Excess_Inventory_Value","Decision_Score","Forecast_Next_Month"]
+    cur = current_a[cols].rename(columns={
+        "Status":"Current_Status","Action":"Current_Action","Days_Cover":"Current_Days_Cover",
+        "Recommended_Order":"Current_Recommended_Order","Purchase_Value":"Current_Purchase_Value",
+        "Service_Risk_Value":"Current_Service_Risk_Value","Excess_Inventory_Value":"Current_Excess_Value",
+        "Decision_Score":"Current_Decision_Score","Forecast_Next_Month":"Current_Forecast"})
+    prev = previous_a[cols].rename(columns={
+        "Status":"Previous_Status","Action":"Previous_Action","Days_Cover":"Previous_Days_Cover",
+        "Recommended_Order":"Previous_Recommended_Order","Purchase_Value":"Previous_Purchase_Value",
+        "Service_Risk_Value":"Previous_Service_Risk_Value","Excess_Inventory_Value":"Previous_Excess_Value",
+        "Decision_Score":"Previous_Decision_Score","Forecast_Next_Month":"Previous_Forecast"})
+    comp = cur.merge(prev, on="SKU", how="outer")
+    for c in ["Current_Status","Current_Action","Previous_Status","Previous_Action"]:
+        comp[c] = comp[c].fillna("NONE")
+    for c in comp.columns:
+        if c != "SKU" and c not in {"Current_Status","Current_Action","Previous_Status","Previous_Action"}:
+            comp[c] = pd.to_numeric(comp[c], errors="coerce").fillna(0)
+
+    snap = _snapshot_for_period(raw, current_period).merge(
+        _snapshot_for_period(raw, previous_period),
+        on="SKU", how="outer", suffixes=("_Current","_Previous")
+    )
+    for c in ["Description_Current","Description_Previous","Supplier_Current","Supplier_Previous"]:
+        if c in snap.columns:
+            snap[c] = snap[c].fillna("")
+    comp = comp.merge(snap, on="SKU", how="outer")
+    comp["Description"] = np.where(comp["Description_Current"].astype(str).str.len() > 0, comp["Description_Current"], comp["Description_Previous"])
+    comp["Supplier"] = np.where(comp["Supplier_Current"].astype(str).str.len() > 0, comp["Supplier_Current"], comp["Supplier_Previous"])
+    for c in ["Sales_Actual_Current","Sales_Actual_Previous","Stock_Actual_Current","Stock_Actual_Previous","Open_PO_Actual_Current","Open_PO_Actual_Previous"]:
+        if c in comp.columns:
+            comp[c] = pd.to_numeric(comp[c], errors="coerce").fillna(0)
+
+    comp["Sales_Delta_Pct"] = _safe_pct_delta(comp["Sales_Actual_Current"], comp["Sales_Actual_Previous"])
+    comp["Stock_Delta_Pct"] = _safe_pct_delta(comp["Stock_Actual_Current"], comp["Stock_Actual_Previous"])
+    comp["Open_PO_Delta"] = comp["Open_PO_Actual_Current"] - comp["Open_PO_Actual_Previous"]
+    comp["Days_Cover_Delta"] = comp["Current_Days_Cover"] - comp["Previous_Days_Cover"]
+    comp["Recommended_Order_Delta"] = comp["Current_Recommended_Order"] - comp["Previous_Recommended_Order"]
+    comp["Purchase_Value_Delta"] = comp["Current_Purchase_Value"] - comp["Previous_Purchase_Value"]
+    comp["Service_Risk_Delta"] = comp["Current_Service_Risk_Value"] - comp["Previous_Service_Risk_Value"]
+    comp["Excess_Value_Delta"] = comp["Current_Excess_Value"] - comp["Previous_Excess_Value"]
+    comp["Decision_Score_Delta"] = comp["Current_Decision_Score"] - comp["Previous_Decision_Score"]
+    comp["Action_Changed"] = comp["Current_Action"] != comp["Previous_Action"]
+    comp["Action_Transition"] = comp["Previous_Action"].astype(str) + " → " + comp["Current_Action"].astype(str)
+    comp["Change_Classification"] = comp.apply(_change_classification, axis=1)
+    comp["Change_Reason"] = comp.apply(_change_reason, axis=1)
+    comp["Change_Score"] = (
+        (comp["Service_Risk_Delta"] > 0).astype(int) * 2
+        + (comp["Purchase_Value_Delta"] > 0).astype(int)
+        + (comp["Days_Cover_Delta"] < -1).astype(int)
+        + ((comp["Current_Action"]=="BUY_NOW") & (comp["Previous_Action"]!="BUY_NOW")).astype(int) * 2
+        - (comp["Service_Risk_Delta"] < 0).astype(int) * 2
+        - (comp["Purchase_Value_Delta"] < 0).astype(int)
+        - (comp["Days_Cover_Delta"] > 1).astype(int)
+        - ((comp["Previous_Action"]=="BUY_NOW") & (comp["Current_Action"]!="BUY_NOW")).astype(int) * 2
+    )
+    comp = comp.sort_values(["Change_Score","Service_Risk_Delta","Purchase_Value_Delta"], ascending=[False,False,False]).reset_index(drop=True)
+    comp["Priority"] = np.arange(1, len(comp)+1)
+
+    purchase_current = float(current_a["Purchase_Value"].sum())
+    purchase_previous = float(previous_a["Purchase_Value"].sum())
+    service_current = float(current_a["Service_Risk_Value"].sum())
+    service_previous = float(previous_a["Service_Risk_Value"].sum())
+    excess_current = float(current_a["Excess_Inventory_Value"].sum())
+    excess_previous = float(previous_a["Excess_Inventory_Value"].sum())
+    meta.update({
+        "current_period": current_period, "previous_period": previous_period, "has_comparison": True,
+        "purchase_current": purchase_current, "purchase_previous": purchase_previous,
+        "purchase_delta": purchase_current - purchase_previous,
+        "purchase_delta_pct": float(_safe_pct_delta(purchase_current, purchase_previous)),
+        "service_risk_current": service_current, "service_risk_previous": service_previous,
+        "service_risk_delta": service_current - service_previous,
+        "service_risk_delta_pct": float(_safe_pct_delta(service_current, service_previous)),
+        "excess_current": excess_current, "excess_previous": excess_previous,
+        "excess_delta": excess_current - excess_previous,
+        "excess_delta_pct": float(_safe_pct_delta(excess_current, excess_previous)),
+        "critical_current": int((current_a["Status"]=="🔴 CRITICAL").sum()),
+        "critical_previous": int((previous_a["Status"]=="🔴 CRITICAL").sum()),
+        "critical_delta": int((current_a["Status"]=="🔴 CRITICAL").sum() - (previous_a["Status"]=="🔴 CRITICAL").sum()),
+        "action_changes": int(comp["Action_Changed"].sum()),
+        "worsened": int((comp["Change_Classification"]=="WORSENED").sum()),
+        "improved": int((comp["Change_Classification"]=="IMPROVED").sum()),
+        "watch": int((comp["Change_Classification"]=="WATCH").sum()),
+    })
+    return comp, current_a, previous_a, meta
+
+def agent_change_monitor_tool(comparison, meta=None):
+    if comparison is None or comparison.empty:
+        return {"name":"change_monitor","purpose":"Compare two planning periods.","kpis":{"available":False},"rows":[]}
+    meta = meta or {}
+    x = comparison.head(10)
+    return {
+        "name":"change_monitor",
+        "purpose":"Explain what materially changed between the selected periods and which SKUs need attention.",
+        "kpis":{
+            "available":True,
+            "current_period":meta.get("current_period"),
+            "previous_period":meta.get("previous_period"),
+            "purchase_delta":meta.get("purchase_delta",0),
+            "service_risk_delta":meta.get("service_risk_delta",0),
+            "excess_delta":meta.get("excess_delta",0),
+            "critical_delta":meta.get("critical_delta",0),
+            "action_changes":meta.get("action_changes",0),
+            "worsened":meta.get("worsened",0),
+            "improved":meta.get("improved",0),
+        },
+        "rows":x[[
+            "SKU","Description","Supplier","Previous_Action","Current_Action","Action_Transition",
+            "Previous_Days_Cover","Current_Days_Cover","Days_Cover_Delta",
+            "Purchase_Value_Delta","Service_Risk_Delta","Excess_Value_Delta",
+            "Sales_Delta_Pct","Change_Classification","Change_Reason"
+        ]].round(2).to_dict("records")
+    }
+
 def data_quality_report(df):
     rows = []
     for col in REQUIRED:
@@ -328,7 +544,7 @@ td{{padding:10px;border-bottom:1px solid var(--line);vertical-align:top}}
 <div class="header">
 <h1>{html_lib.escape(title)}</h1>
 <p>{html_lib.escape(subtitle)}</p>
-<div class="meta">Generated {generated} · Supply Chain AI Copilot V1.8.2</div>
+<div class="meta">Generated {generated} · Supply Chain AI Copilot V1.9</div>
 </div>
 {body}
 <div class="footer">Decision support only. Validate purchase execution and supplier commitments before release.</div>
@@ -502,7 +718,46 @@ def build_data_quality_report_html(raw, dq):
 """
     return _html_shell("🧹 Data Quality Report", "Structural and consistency checks for the current dataset.", body)
 
-def build_management_pack(a, raw, dq, plan):
+
+def build_change_monitor_html(comparison, meta):
+    if comparison is None or comparison.empty or not meta.get("has_comparison"):
+        return _html_shell(
+            "🔄 Change Monitor Report",
+            "No comparison available.",
+            '<div class="section"><div class="note">No hay dos periodos comparables disponibles.</div></div>'
+        )
+    worsened = comparison[comparison["Change_Classification"].isin(["WORSENED","WATCH"])].head(15)
+    improved = comparison[comparison["Change_Classification"]=="IMPROVED"].head(15)
+    body = f"""
+<div class="grid">
+<div class="card"><div class="label">Comparison</div><div class="value" style="font-size:20px">{meta["previous_period"]} → {meta["current_period"]}</div></div>
+<div class="card"><div class="label">Purchase delta</div><div class="value">{_fmt_eur(meta["purchase_delta"])}</div></div>
+<div class="card"><div class="label">Service risk delta</div><div class="value">{_fmt_eur(meta["service_risk_delta"])}</div></div>
+<div class="card"><div class="label">Action changes</div><div class="value">{meta["action_changes"]}</div></div>
+</div>
+<div class="grid">
+<div class="card"><div class="label">Worsened</div><div class="value">{meta["worsened"]}</div></div>
+<div class="card"><div class="label">Improved</div><div class="value">{meta["improved"]}</div></div>
+<div class="card"><div class="label">Watch</div><div class="value">{meta["watch"]}</div></div>
+<div class="card"><div class="label">Critical delta</div><div class="value">{meta["critical_delta"]:+d}</div></div>
+</div>
+<div class="section"><h2>Top changes</h2>
+<table><thead><tr><th>SKU</th><th>Description</th><th>Supplier</th><th>Previous action</th><th>Current action</th><th>Cover Δ</th><th>Purchase Δ</th><th>Service risk Δ</th><th>Classification</th><th>Reason</th></tr></thead>
+<tbody>{_table_html(comparison.head(20), ["SKU","Description","Supplier","Previous_Action","Current_Action","Days_Cover_Delta","Purchase_Value_Delta","Service_Risk_Delta","Change_Classification","Change_Reason"], ["Purchase_Value_Delta","Service_Risk_Delta"], status_cols=["Change_Classification"])}</tbody></table></div>
+<div class="section"><h2>Worsened / watch</h2>
+<table><thead><tr><th>SKU</th><th>Description</th><th>Cover Δ</th><th>Purchase Δ</th><th>Service risk Δ</th><th>Reason</th></tr></thead>
+<tbody>{_table_html(worsened, ["SKU","Description","Days_Cover_Delta","Purchase_Value_Delta","Service_Risk_Delta","Change_Reason"], ["Purchase_Value_Delta","Service_Risk_Delta"])}</tbody></table></div>
+<div class="section"><h2>Improved</h2>
+<table><thead><tr><th>SKU</th><th>Description</th><th>Cover Δ</th><th>Purchase Δ</th><th>Service risk Δ</th><th>Reason</th></tr></thead>
+<tbody>{_table_html(improved, ["SKU","Description","Days_Cover_Delta","Purchase_Value_Delta","Service_Risk_Delta","Change_Reason"], ["Purchase_Value_Delta","Service_Risk_Delta"])}</tbody></table></div>
+"""
+    return _html_shell(
+        "🔄 Supply Chain Change Monitor",
+        "What changed between two planning periods and where the planner should look first.",
+        body
+    )
+
+def build_management_pack(a, raw, dq, plan, comparison=None, comparison_meta=None):
     reports = {
         "01_Executive_Report.html": build_executive_html(a, raw, dq, plan),
         "02_Inventory_Risk_Report.html": build_inventory_report_html(a, raw),
@@ -511,6 +766,8 @@ def build_management_pack(a, raw, dq, plan):
         "05_Supplier_Risk_Report.html": build_supplier_report_html(a),
         "06_Data_Quality_Report.html": build_data_quality_report_html(raw, dq),
     }
+    if comparison is not None and comparison_meta is not None:
+        reports["07_Change_Monitor_Report.html"] = build_change_monitor_html(comparison, comparison_meta)
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
         for name, text in reports.items():
@@ -814,7 +1071,7 @@ def _xlsx_build_complete(a, raw, dq, plan):
 
     return wb
 
-def _excel_export_bytes(kind, a, raw, dq, plan):
+def _excel_export_bytes(kind, a, raw, dq, plan, comparison=None, comparison_meta=None):
     if xlsxwriter is None:
         raise RuntimeError("XlsxWriter is not available. Add XlsxWriter to requirements.txt and redeploy.")
     wb = {"executive": _xlsx_build_executive, "detailed": _xlsx_build_detailed, "complete": _xlsx_build_complete}[kind](a, raw, dq, plan)
@@ -840,9 +1097,9 @@ def _excel_bytes(kind, a, raw, dq, plan):
     # xlsxwriter's constructor in these wrapper builders.
     # The builders above need a stream. We'll use the deterministic builder
     # below for all three.
-    return _xlsx_stream_build(kind, a, raw, dq, plan)
+    return _xlsx_stream_build(kind, a, raw, dq, plan, comparison, comparison_meta)
 
-def _xlsx_stream_build(kind, a, raw, dq, plan):
+def _xlsx_stream_build(kind, a, raw, dq, plan, comparison=None, comparison_meta=None):
     buf = io.BytesIO()
     # Builders create workbook instances; to ensure close flushes to buf,
     # we use a dedicated local writer around a precomputed workbook layout.
@@ -967,13 +1224,52 @@ def _xlsx_stream_build(kind, a, raw, dq, plan):
         _xlsx_title(src_ws, "Source Data", "Normalized source dataset used by the decision engine.", wb, max(5, len(raw.columns)-1))
         _xlsx_write_df(src_ws, raw, 3, 0, list(raw.columns), wb, "CompleteSourceData")
 
+
+    if comparison is not None and comparison_meta is not None and not comparison.empty:
+        cm = wb.add_worksheet("Change Monitor")
+        _xlsx_title(
+            cm,
+            "Change Monitor",
+            f"{comparison_meta['previous_period']} → {comparison_meta['current_period']} · period-over-period changes",
+            wb, 10
+        )
+        _xlsx_kpi_block(cm, wb, 3, 0, 3, "Purchase delta", f"€{comparison_meta['purchase_delta']:,.0f}", "#ECFDF5")
+        _xlsx_kpi_block(cm, wb, 3, 3, 3, "Service risk delta", f"€{comparison_meta['service_risk_delta']:,.0f}", "#FEF2F2")
+        _xlsx_kpi_block(cm, wb, 3, 6, 3, "Worsened", str(comparison_meta["worsened"]), "#FEF3C7")
+        _xlsx_kpi_block(cm, wb, 3, 9, 3, "Action changes", str(comparison_meta["action_changes"]), "#EAF2FF")
+        cm_df = comparison.head(20)
+        fmt_cm = _xlsx_base_formats(wb)
+        _xlsx_write_df(
+            cm, cm_df, 8, 0,
+            ["SKU","Description","Supplier","Previous_Action","Current_Action","Action_Transition",
+             "Previous_Days_Cover","Current_Days_Cover","Days_Cover_Delta",
+             "Purchase_Value_Delta","Service_Risk_Delta","Excess_Value_Delta",
+             "Sales_Delta_Pct","Change_Classification","Change_Reason"],
+            wb, "ChangeMonitor",
+            formats={
+                **fmt_cm,
+                "Purchase_Value_Delta": fmt_cm["currency"],
+                "Service_Risk_Delta": fmt_cm["currency"],
+                "Excess_Value_Delta": fmt_cm["currency"],
+                "Days_Cover_Delta": fmt_cm["number"],
+                "Sales_Delta_Pct": fmt_cm["number"],
+            },
+            widths={"Description":28,"Action_Transition":28,"Change_Reason":40}
+        )
+        try:
+            _xlsx_write_section_chart(
+                cm, wb, "column", "Service risk delta by SKU", 0, 10,
+                9, 9 + min(len(cm_df), 10), "Q9"
+            )
+        except Exception:
+            pass
     wb.close()
     return buf.getvalue()
 
-def _excel_export_bytes(kind, a, raw, dq, plan):
+def _excel_export_bytes(kind, a, raw, dq, plan, comparison=None, comparison_meta=None):
     if xlsxwriter is None:
         raise RuntimeError("XlsxWriter is not available. Add XlsxWriter to requirements.txt and redeploy.")
-    return _xlsx_stream_build(kind, a, raw, dq, plan)
+    return _xlsx_stream_build(kind, a, raw, dq, plan, comparison, comparison_meta)
 
 
 def validate(df):
@@ -1288,9 +1584,11 @@ def agent_forecast_tool(a):
         ]].round(2).to_dict("records"),
     }
 
-def route_agent(question, a):
+def route_agent(question, a, comparison=None, comparison_meta=None):
     q = question.lower()
     tools = []
+    if any(k in q for k in ["cambio","cambió","cambio","compar","anterior","último periodo","ultimo periodo","evolución","empeor","mejoró","mejoro","vs","versus"]):
+        tools.append(agent_change_monitor_tool(comparison, comparison_meta))
     if any(k in q for k in ["compr","purchase","orden","po","reponer","buy"]):
         tools.append(agent_purchase_tool(a))
     if any(k in q for k in ["exceso","sobrestock","inventory","inventario","capital"]):
@@ -1302,10 +1600,9 @@ def route_agent(question, a):
     if any(k in q for k in ["forecast","demanda","previsión","tendencia"]):
         tools.append(agent_forecast_tool(a))
     if not tools or any(k in q for k in ["prioridad","prioridades","resumen","esta semana","qué debería"]):
-        tools = [
-            agent_purchase_tool(a), agent_service_tool(a), agent_inventory_tool(a),
-            agent_supplier_tool(a), agent_forecast_tool(a)
-        ]
+        tools = [agent_purchase_tool(a), agent_service_tool(a), agent_inventory_tool(a), agent_supplier_tool(a), agent_forecast_tool(a)]
+        if any(k in q for k in ["cambio","compar","evolución","último","ultimo"]):
+            tools.append(agent_change_monitor_tool(comparison, comparison_meta))
     seen = set()
     out = []
     for t in tools:
@@ -1314,8 +1611,8 @@ def route_agent(question, a):
             seen.add(t["name"])
     return out
 
-def agent_local_response(question, a):
-    tools = route_agent(question, a)
+def agent_local_response(question, a, comparison=None, comparison_meta=None):
+    tools = route_agent(question, a, comparison, comparison_meta)
     lines = ["## Supply Chain Agent — análisis"]
     for tool in tools:
         lines.append(f"### {tool['name']}")
@@ -1343,6 +1640,21 @@ def agent_local_response(question, a):
                 f"- **{r['SKU']}** → forecast {r['Forecast_Next_Month']:.0f} uds ({r['Forecast_Change_Pct']:+.1f}%)."
                 for r in tool["rising"][:5]
             ]
+        elif tool["name"] == "change_monitor":
+            if not tool["kpis"].get("available"):
+                lines.append("No hay dos periodos comparables disponibles.")
+            else:
+                k = tool["kpis"]
+                lines.append(
+                    f"Comparación **{k['previous_period']} → {k['current_period']}**: "
+                    f"compras {k['purchase_delta']:+,.0f} €, riesgo de servicio {k['service_risk_delta']:+,.0f} €, "
+                    f"cambios de acción {k['action_changes']}."
+                )
+                lines += [
+                    f"- **{r['SKU']}** → {r['Change_Classification']} · cobertura {r['Days_Cover_Delta']:+.1f}d · "
+                    f"compra {r['Purchase_Value_Delta']:+,.0f} € · {r['Change_Reason']}"
+                    for r in tool["rows"][:8]
+                ]
     return "\n".join(lines)
 
 
@@ -1418,8 +1730,8 @@ def test_openai_connection(api_key, model):
             "exception": type(exc).__name__,
         }
 
-def ai_chat(question, a, api_key=None, model="gpt-5.6-luna"):
-    tool_results = route_agent(question, a)
+def ai_chat(question, a, api_key=None, model="gpt-5.6-luna", comparison=None, comparison_meta=None):
+    tool_results = route_agent(question, a, comparison, comparison_meta)
 
     if not api_key or OpenAI is None:
         return agent_local_response(question, a)
@@ -1437,7 +1749,7 @@ def ai_chat(question, a, api_key=None, model="gpt-5.6-luna"):
                 "Para exceso cuantifica el valor de inventario potencialmente liberable. "
                 "Para servicio cuantifica unidades y valor expuesto. "
                 "Para proveedores explica concentración de riesgo. "
-                "Para forecast señala cambios que puedan modificar decisiones. "
+                "Para forecast señala cambios que puedan modificar decisiones. ""Para comparación explica qué ha mejorado, empeorado o cambiado de acción entre periodos y cuantifica los deltas. "
                 "En preguntas ejecutivas: Resumen → Top 3 prioridades → Acciones → Riesgos/Supuestos."
             ),
             input=f"PREGUNTA:\\n{question}\\n\\nHERRAMIENTAS:\\n{tool_results}\\n\\nDATASET:\\n{context}"
@@ -1501,6 +1813,24 @@ with st.sidebar:
         index=0,
         help="Modelos actuales disponibles en la Responses API."
     )
+
+    if len(available_periods) >= 2:
+        with st.expander("🔄 Comparación de periodos"):
+            selected_current = st.selectbox(
+                "Periodo actual",
+                available_periods,
+                index=available_periods.index(default_current),
+                key="change_current_period"
+            )
+            current_idx = available_periods.index(selected_current)
+            prev_options = available_periods[:current_idx] or [available_periods[0]]
+            selected_previous = st.selectbox(
+                "Comparar con",
+                prev_options,
+                index=prev_options.index(default_previous) if default_previous in prev_options else len(prev_options)-1,
+                key="change_previous_period"
+            )
+            st.caption(f"Actual: {selected_current} · Anterior: {selected_previous}")
 
     if stored_key:
         prefix = stored_key[:8] if len(stored_key) >= 8 else stored_key
@@ -1595,6 +1925,30 @@ K = kpis(a)
 dq = data_quality_report(raw)
 plan = build_action_plan(a)
 
+available_periods = _periods_from_raw(raw)
+if len(available_periods) >= 2:
+    default_current = st.session_state.get("change_current_period", available_periods[-1])
+    if default_current not in available_periods:
+        default_current = available_periods[-1]
+    current_idx = available_periods.index(default_current)
+    prev_options = available_periods[:current_idx]
+    if not prev_options:
+        prev_options = available_periods[:-1]
+    default_previous = st.session_state.get(
+        "change_previous_period",
+        prev_options[-1] if prev_options else available_periods[-2]
+    )
+    if default_previous not in prev_options:
+        default_previous = prev_options[-1]
+    comparison, comparison_current_a, comparison_previous_a, comparison_meta = build_period_comparison(
+        raw, safety_days, service, default_current, default_previous
+    )
+else:
+    default_current = default_previous = None
+    comparison = pd.DataFrame()
+    comparison_current_a = comparison_previous_a = None
+    comparison_meta = {"available_periods": available_periods, "has_comparison": False}
+
 # Add/refresh forecast change vs historical monthly average
 a["Forecast_Change_Pct"] = np.where(
     a["Avg_Monthly_Demand"] > 0,
@@ -1606,7 +1960,7 @@ a["Forecast_Change_Pct"] = np.where(
 # Header
 # -----------------------------
 st.title("📦 Supply Chain AI Copilot")
-st.caption("From raw supply-chain data to prioritized decisions · V1.8.2")
+st.caption("From raw supply-chain data to prioritized decisions · V1.9")
 
 c1,c2,c3,c4,c5,c6 = st.columns(6)
 c1.metric("SKUs", K["sku"])
@@ -1619,7 +1973,7 @@ c6.metric("📈 Next month", f"{K['forecast']:,.0f}")
 tabs = st.tabs([
     "🎯 Decision Center","📊 Inventory","📈 Forecast",
     "🧩 ABC/XYZ","🚚 Suppliers","🧪 Scenarios","🧹 Data Quality",
-    "📝 Action Plan","🤖 Copilot","📤 Export"
+    "📝 Action Plan","🔄 Change Monitor","🤖 Copilot","📤 Export"
 ])
 
 # -----------------------------
@@ -1871,11 +2225,70 @@ with tabs[7]:
     )
 
 # -----------------------------
-# Copilot
+# Change Monitor
 # -----------------------------
 with tabs[8]:
+    st.subheader("🔄 What changed?")
+    if not comparison_meta.get("has_comparison"):
+        st.info("Necesitas al menos dos periodos históricos para comparar la evolución.")
+    else:
+        st.caption(f"Comparando **{comparison_meta['previous_period']} → {comparison_meta['current_period']}**")
+
+        cm1, cm2, cm3, cm4, cm5 = st.columns(5)
+        cm1.metric("Purchase need", f"€{comparison_meta['purchase_current']:,.0f}", f"{comparison_meta['purchase_delta']:+,.0f} €")
+        cm2.metric("Service risk", f"€{comparison_meta['service_risk_current']:,.0f}", f"{comparison_meta['service_risk_delta']:+,.0f} €")
+        cm3.metric("Excess exposure", f"€{comparison_meta['excess_current']:,.0f}", f"{comparison_meta['excess_delta']:+,.0f} €")
+        cm4.metric("Critical SKUs", comparison_meta["critical_current"], f"{comparison_meta['critical_delta']:+d}")
+        cm5.metric("Action changes", comparison_meta["action_changes"], f"{comparison_meta['worsened']} worsened")
+
+        if comparison_meta["worsened"] > comparison_meta["improved"]:
+            st.warning(f"Hay más cambios desfavorables ({comparison_meta['worsened']}) que favorables ({comparison_meta['improved']}).")
+        elif comparison_meta["improved"] > comparison_meta["worsened"]:
+            st.success(f"La evolución es mayoritariamente favorable: {comparison_meta['improved']} mejorados frente a {comparison_meta['worsened']} empeorados.")
+        else:
+            st.info("La evolución está equilibrada entre mejoras y empeoramientos.")
+
+        view = comparison[[
+            "Priority","SKU","Description","Supplier","Previous_Action","Current_Action",
+            "Action_Transition","Previous_Days_Cover","Current_Days_Cover","Days_Cover_Delta",
+            "Purchase_Value_Delta","Service_Risk_Delta","Excess_Value_Delta","Sales_Delta_Pct",
+            "Change_Classification","Change_Reason"
+        ]].copy()
+        st.dataframe(view, use_container_width=True, hide_index=True)
+
+        c1, c2 = st.columns(2)
+        with c1:
+            st.subheader("Top worsened / watch")
+            worsened = comparison[comparison["Change_Classification"].isin(["WORSENED","WATCH"])].head(8)
+            st.dataframe(
+                worsened[["SKU","Description","Current_Action","Days_Cover_Delta",
+                          "Purchase_Value_Delta","Service_Risk_Delta","Change_Classification"]],
+                use_container_width=True, hide_index=True
+            )
+        with c2:
+            st.subheader("Top improved")
+            improved = comparison[comparison["Change_Classification"]=="IMPROVED"].sort_values(
+                ["Service_Risk_Delta","Purchase_Value_Delta"], ascending=[True,True]
+            ).head(8)
+            st.dataframe(
+                improved[["SKU","Description","Previous_Action","Current_Action",
+                          "Days_Cover_Delta","Purchase_Value_Delta","Service_Risk_Delta"]],
+                use_container_width=True, hide_index=True
+            )
+
+        st.download_button(
+            "⬇️ Download change monitor",
+            comparison.to_csv(index=False).encode("utf-8"),
+            "change_monitor.csv",
+            "text/csv"
+        )
+
+# -----------------------------
+# Copilot
+# -----------------------------
+with tabs[9]:
     st.subheader("⚡ Quick analyses")
-    q1, q2, q3, q4 = st.columns(4)
+    q1, q2, q3, q4, q5 = st.columns(5)
     quick_question = None
     if q1.button("🛒 Purchase priorities"):
         quick_question = "¿Qué debería comprar esta semana y cuáles son las 3 prioridades más importantes?"
@@ -1885,13 +2298,15 @@ with tabs[8]:
         quick_question = "¿Qué proveedores requieren más atención y por qué?"
     if q4.button("📈 Demand outlook"):
         quick_question = "¿Qué cambios de demanda pueden cambiar mis decisiones de compra?"
+    if q5.button("🔄 What changed?"):
+        quick_question = "¿Qué ha cambiado entre el último periodo y el anterior y cuáles son las 3 mayores variaciones?"
     if quick_question:
         st.session_state.chat.append({"role": "user", "content": quick_question})
         with st.chat_message("user"):
             st.markdown(quick_question)
         with st.chat_message("assistant"):
             with st.spinner("Ejecutando análisis de Supply Chain..."):
-                ans = ai_chat(quick_question, a, effective_key, model)
+                ans = ai_chat(quick_question, a, effective_key, model, comparison, comparison_meta)
             st.markdown(ans)
         st.session_state.chat.append({"role": "assistant", "content": ans})
 
@@ -1907,18 +2322,18 @@ with tabs[8]:
             st.markdown(q)
         with st.chat_message("assistant"):
             with st.spinner("Analyzing..."):
-                ans = ai_chat(q, a, effective_key, model)
+                ans = ai_chat(q, a, effective_key, model, comparison, comparison_meta)
             st.markdown(ans)
         st.session_state.chat.append({"role":"assistant","content":ans})
 
 # -----------------------------
 # Export
 # -----------------------------
-with tabs[9]:
+with tabs[10]:
     st.subheader("📤 Reporting Center")
     st.caption("Visual HTML reports and professional Excel workbooks containing the same decision-ready information.")
 
-    pack_bytes, report_map = build_management_pack(a, raw, dq, plan)
+    pack_bytes, report_map = build_management_pack(a, raw, dq, plan, comparison, comparison_meta)
 
     r1, r2, r3, r4 = st.columns(4)
     r1.metric("Purchase requirement", f"€{a['Purchase_Value'].sum():,.0f}")
@@ -1929,9 +2344,9 @@ with tabs[9]:
     excel_exec = excel_detail = excel_complete = None
     excel_error = None
     try:
-        excel_exec = _excel_export_bytes("executive", a, raw, dq, plan)
-        excel_detail = _excel_export_bytes("detailed", a, raw, dq, plan)
-        excel_complete = _excel_export_bytes("complete", a, raw, dq, plan)
+        excel_exec = _excel_export_bytes("executive", a, raw, dq, plan, comparison, comparison_meta)
+        excel_detail = _excel_export_bytes("detailed", a, raw, dq, plan, comparison, comparison_meta)
+        excel_complete = _excel_export_bytes("complete", a, raw, dq, plan, comparison, comparison_meta)
     except Exception as e:
         excel_error = str(e)
 
@@ -1972,9 +2387,26 @@ with tabs[9]:
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True
             )
-    st.caption("The Excel workbook mirrors the five detailed reports as separate formatted sheets, including charts where useful.")
+    st.caption("The Excel workbook mirrors the detailed reports and adds a Change Monitor sheet.")
 
-    st.markdown("### 3. Complete Management Pack")
+    if "07_Change_Monitor_Report.html" in report_map:
+        st.markdown("### 3. Change Monitor")
+        cm1, cm2 = st.columns(2)
+        with cm1:
+            st.download_button(
+                "🔄 Change Monitor Report (HTML)",
+                report_map["07_Change_Monitor_Report.html"].encode("utf-8"),
+                "change_monitor_report.html",
+                "text/html", use_container_width=True
+            )
+        with cm2:
+            st.metric(
+                "Changes",
+                comparison_meta["action_changes"],
+                f"{comparison_meta['worsened']} worsened / {comparison_meta['improved']} improved"
+            )
+
+    st.markdown("### 4. Complete Management Pack")
     p1, p2 = st.columns(2)
     with p1:
         st.download_button("📦 Management Pack (ZIP)", pack_bytes, "supply_chain_management_pack_v17.zip", "application/zip", use_container_width=True)
@@ -1987,7 +2419,7 @@ with tabs[9]:
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True
             )
-    st.caption("The Excel pack combines the executive dashboard, all detailed report sheets and the normalized source data in one workbook.")
+    st.caption("The Excel pack combines the executive dashboard, detailed report sheets, Change Monitor and normalized source data in one workbook.")
 
     if excel_error:
         st.warning(f"Excel export unavailable: {excel_error}")
