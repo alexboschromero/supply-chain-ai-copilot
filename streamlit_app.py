@@ -659,7 +659,7 @@ _REPORT_TRANSLATIONS_ES = {
     "Planner-ready operational worklist with ownership and deadlines.":"Lista operativa preparada para el planner, con responsables y fechas límite.",
     "Supplier concentration, service exposure and purchasing exposure.":"Concentración de proveedores, exposición de servicio y exposición de compras.",
     "Generated":"Generado", "Decision support only. Validate purchase execution and supplier commitments before release.":"Solo para soporte a la decisión. Valida la ejecución de compras y los compromisos de los proveedores antes de su liberación.",
-    "Supply Chain AI Copilot V2.0.12":"Supply Chain AI Copilot V2.0.12",
+    "Supply Chain AI Copilot V2.0.13":"Supply Chain AI Copilot V2.0.13",
     "No comparable periods are available.":"No hay periodos comparables disponibles.",
 }
 
@@ -712,7 +712,7 @@ td{{padding:10px;border-bottom:1px solid var(--line);vertical-align:top}}
 <div class="header">
 <h1>{html_lib.escape(title)}</h1>
 <p>{html_lib.escape(subtitle)}</p>
-<div class="meta">Generated {generated} · Supply Chain AI Copilot V2.0.12</div>
+<div class="meta">Generated {generated} · Supply Chain AI Copilot V2.0.13</div>
 </div>
 {body}
 <div class="footer">Decision support only. Validate purchase execution and supplier commitments before release.</div>
@@ -2372,6 +2372,166 @@ def export_purchase(a):
     return x[cols].sort_values(["Supplier","Estimated_PO_Value"], ascending=[True,False])
 
 # -----------------------------
+# Manufacturing / MRP engine
+# -----------------------------
+def normalize_bom(df):
+    if df is None or df.empty:
+        return pd.DataFrame(columns=["Parent_SKU","Component_SKU","Qty_Per","Scrap_Pct"])
+    aliases = {
+        "parent_sku":"Parent_SKU", "parent":"Parent_SKU", "finished_good":"Parent_SKU", "finished_good_sku":"Parent_SKU",
+        "component_sku":"Component_SKU", "component":"Component_SKU", "child_sku":"Component_SKU", "material":"Component_SKU",
+        "qty_per":"Qty_Per", "quantity_per":"Qty_Per", "qty":"Qty_Per", "quantity":"Qty_Per",
+        "scrap_pct":"Scrap_Pct", "scrap":"Scrap_Pct", "waste_pct":"Scrap_Pct",
+    }
+    rename={}
+    for c in df.columns:
+        key=str(c).strip().lower().replace(" ","_")
+        if key in aliases: rename[c]=aliases[key]
+    x=df.rename(columns=rename).copy()
+    if not all(c in x.columns for c in ["Parent_SKU","Component_SKU","Qty_Per"]):
+        return pd.DataFrame()
+    x["Parent_SKU"]=x["Parent_SKU"].astype(str).str.strip()
+    x["Component_SKU"]=x["Component_SKU"].astype(str).str.strip()
+    x["Qty_Per"]=pd.to_numeric(x["Qty_Per"],errors="coerce")
+    if "Scrap_Pct" not in x.columns: x["Scrap_Pct"]=0.0
+    x["Scrap_Pct"]=pd.to_numeric(x["Scrap_Pct"],errors="coerce").fillna(0).clip(lower=0,upper=100)
+    x=x[(x["Parent_SKU"]!="")&(x["Component_SKU"]!="")&(x["Qty_Per"]>0)].copy()
+    x["Effective_Qty_Per"]=x["Qty_Per"]*(1+x["Scrap_Pct"]/100)
+    return x[["Parent_SKU","Component_SKU","Qty_Per","Scrap_Pct","Effective_Qty_Per"]]
+
+def _mrp_template_bytes():
+    df=pd.DataFrame([
+        ["FG-001","RM-001",2.0,2.0],
+        ["FG-001","RM-002",1.0,0.0],
+        ["FG-002","RM-001",1.5,1.0],
+    ],columns=["Parent_SKU","Component_SKU","Qty_Per","Scrap_Pct"])
+    if xlsxwriter is None:
+        return df.to_csv(index=False).encode("utf-8"), "csv"
+    buf=io.BytesIO(); wb=xlsxwriter.Workbook(buf,{"in_memory":True}); ws=wb.add_worksheet("BOM Template" if st.session_state.get("language","English")=="English" else "Plantilla BOM")
+    head=wb.add_format({"bold":True,"bg_color":"#17365D","font_color":"#FFFFFF"})
+    for j,c in enumerate(df.columns): ws.write(0,j,c,head)
+    for i,row in enumerate(df.itertuples(index=False),1):
+        for j,v in enumerate(row): ws.write(i,j,v)
+    ws.set_column("A:B",20); ws.set_column("C:D",14); ws.freeze_panes(1,0); wb.close()
+    return buf.getvalue(), "xlsx"
+
+def _mrp_round_qty(qty, lot_size):
+    qty=float(max(qty,0)); lot=float(lot_size or 0)
+    if qty<=0: return 0.0
+    return math.ceil(qty/lot)*lot if lot>0 else qty
+
+def run_mrp(raw, full_analysis, bom, parent_skus=None, horizon=6, demand_growth=0.0, production_safety_days=5, use_open_po=True):
+    if bom is None or bom.empty: return pd.DataFrame(), pd.DataFrame(), {"parents":0,"components":0,"shortages":0,"purchase":0.0}
+    b=bom.copy()
+    master=full_analysis.copy()
+    master["SKU"]=master["SKU"].astype(str)
+    if parent_skus:
+        parents=[str(x) for x in parent_skus]
+    else:
+        parents=sorted(b["Parent_SKU"].unique().tolist())
+    parents=[p for p in parents if p in set(b["Parent_SKU"])]
+    if not parents: return pd.DataFrame(), pd.DataFrame(), {"parents":0,"components":0,"shortages":0,"purchase":0.0}
+    periods=[]
+    available_periods = _periods_from_raw(raw)
+    if available_periods:
+        y, m = _period_tuple(available_periods[-1])
+        base = pd.Period(f"{y}-{m:02d}", freq="M") + 1
+    else:
+        base = pd.Timestamp.today().to_period("M")
+    for i in range(horizon): periods.append(str(base+i))
+    # Parent MPS based on next-month forecast and a controlled growth assumption.
+    parent_master=master.set_index("SKU")
+    mps=[]
+    for p in parents:
+        if p not in parent_master.index: continue
+        r=parent_master.loc[p]
+        base_fc=float(r.get("Forecast_Next_Month",0) or 0)
+        avg_daily=float(r.get("Avg_Daily_Demand",0) or 0)
+        safety=avg_daily*production_safety_days
+        stock=float(r.get("Stock",0) or 0)
+        open_po=float(r.get("Open_PO",0) or 0) if use_open_po else 0
+        for i,period in enumerate(periods):
+            demand=max(0,base_fc*((1+demand_growth)**i))
+            receipt=open_po if i==0 else 0
+            planned=max(0,demand+safety-stock-receipt) if i==0 else max(0,demand+safety)
+            # For later months, carry the prior projected balance implicitly by using demand + safety; MRP components remain conservative.
+            if i>0: planned=demand
+            mps.append({"Parent_SKU":p,"Period":period,"Gross_Requirement":demand,"Planned_Production":planned})
+    mps_df=pd.DataFrame(mps)
+    if mps_df.empty: return pd.DataFrame(), pd.DataFrame(), {"parents":0,"components":0,"shortages":0,"purchase":0.0}
+    # Explode MPS through BOM.
+    merged=mps_df.merge(b[["Parent_SKU","Component_SKU","Effective_Qty_Per"]],on="Parent_SKU",how="inner")
+    merged["Gross_Requirement"]=merged["Planned_Production"]*merged["Effective_Qty_Per"]
+    gross=merged.groupby(["Component_SKU","Period"],as_index=False)["Gross_Requirement"].sum()
+    comp_master=master.set_index("SKU")
+    rows=[]
+    for comp in sorted(gross["Component_SKU"].unique()):
+        if comp in comp_master.index:
+            r=comp_master.loc[comp]
+            opening=float(r.get("Stock",0) or 0)
+            open_po=float(r.get("Open_PO",0) or 0) if use_open_po else 0
+            lead=float(r.get("Lead_Time_Days",0) or 0)
+            moq=float(r.get("MOQ",0) or 0)
+            unit_cost=float(r.get("Unit_Cost",0) or 0)
+            supplier=str(r.get("Supplier",""))
+        else:
+            opening=open_po=lead=moq=unit_cost=0.0; supplier="Unknown"
+        prev=opening
+        for i,period in enumerate(periods):
+            gr=float(gross[(gross.Component_SKU==comp)&(gross.Period==period)]["Gross_Requirement"].sum())
+            receipt=open_po if (i==0 and use_open_po) else 0.0
+            projected_before=prev+receipt-gr
+            net=max(0.0,-projected_before)
+            por=_mrp_round_qty(net,moq)
+            projected_end=projected_before+por
+            shortage=max(0.0,-projected_before) if por==0 else 0.0
+            rows.append({"Component_SKU":comp,"Period":period,"Opening_Inventory":prev,"Gross_Requirement":gr,"Scheduled_Receipts":receipt,"Net_Requirement":net,"Planned_Order_Receipt":por,"Projected_Ending_Inventory":projected_end,"Shortage":shortage,"Supplier":supplier,"Lead_Time_Days":lead,"MOQ":moq,"Unit_Cost":unit_cost,"Planned_Purchase_Value":por*unit_cost})
+            prev=projected_end
+    mrp=pd.DataFrame(rows)
+    # Release period is receipt period shifted by lead time in whole months.
+    if not mrp.empty:
+        mrp["Release_Period"]=mrp.apply(lambda r: str(pd.Period(r["Period"],freq="M")-max(0,math.ceil(float(r["Lead_Time_Days"])/30))),axis=1)
+        mrp["Action"]=np.where(mrp["Planned_Order_Receipt"]>0,"BUY",np.where(mrp["Shortage"]>0,"SHORTAGE","NONE"))
+        mrp["MRP_Type"]="PURCHASE"
+    # Parent-level MPS summary.
+    mps_summary=mps_df.groupby("Period",as_index=False).agg(Parents=("Parent_SKU","nunique"),Gross_Demand=("Gross_Requirement","sum"),Planned_Production=("Planned_Production","sum"))
+    mps_summary["MRP_Type"]="MAKE"
+    meta={"parents":len(parents),"components":int(mrp["Component_SKU"].nunique()) if not mrp.empty else 0,"shortages":int((mrp["Shortage"]>0).sum()) if not mrp.empty else 0,"purchase":float(mrp["Planned_Purchase_Value"].sum()) if not mrp.empty else 0.0}
+    return mps_df,mrp,meta
+
+def _mrp_export_bytes(mps, mrp, meta, language="English"):
+    if xlsxwriter is None: return None
+    buf=io.BytesIO(); wb=xlsxwriter.Workbook(buf,{"in_memory":True})
+    title_fmt=wb.add_format({"bold":True,"font_size":18,"font_color":"#FFFFFF","bg_color":"#17365D"})
+    head=wb.add_format({"bold":True,"bg_color":"#D9EAF7","border":1})
+    money=wb.add_format({"num_format":"€#,##0.00"}); qty=wb.add_format({"num_format":"#,##0.00"})
+    ws=wb.add_worksheet("MRP Summary" if language=="English" else "Resumen MRP")
+    ws.merge_range("A1:F1","Manufacturing MRP" if language=="English" else "MRP de fabricación",title_fmt)
+    labels=["Parent SKUs","Components","Shortages","Planned purchase"] if language=="English" else ["SKUs padre","Componentes","Faltantes","Compra planificada"]
+    vals=[meta["parents"],meta["components"],meta["shortages"],meta["purchase"]]
+    for j,(l,v) in enumerate(zip(labels,vals)): ws.write(2,j,l,head); ws.write(3,j,v,money if j==3 else None)
+    if not mps.empty:
+        w2=wb.add_worksheet("MPS" if language=="English" else "MPS Producción")
+        cols=["Parent_SKU","Period","Gross_Requirement","Planned_Production"]
+        if language=="Spanish": cols=["SKU padre","Periodo","Necesidad bruta","Producción planificada"]
+        out=mps[["Parent_SKU","Period","Gross_Requirement","Planned_Production"]].copy(); out.columns=cols
+        for j,c in enumerate(out.columns): w2.write(0,j,c,head)
+        for i,row in enumerate(out.itertuples(index=False),1):
+            for j,v in enumerate(row): w2.write(i,j,v,money if False else qty if j>=2 else None)
+        w2.set_column(0,1,18); w2.set_column(2,3,20); w2.freeze_panes(1,0)
+    if not mrp.empty:
+        w3=wb.add_worksheet("MRP Detail" if language=="English" else "Detalle MRP")
+        out=mrp[["Component_SKU","Period","Opening_Inventory","Gross_Requirement","Scheduled_Receipts","Net_Requirement","Planned_Order_Receipt","Projected_Ending_Inventory","Shortage","Supplier","Lead_Time_Days","MOQ","Unit_Cost","Planned_Purchase_Value","Release_Period","Action"]].copy()
+        if language=="Spanish": out.columns=["SKU componente","Periodo","Inventario inicial","Necesidad bruta","Recepciones programadas","Necesidad neta","Recepción planificada","Inventario final proyectado","Faltante","Proveedor","Lead time (días)","MOQ","Coste unitario","Valor compra planificada","Periodo lanzamiento","Acción"]
+        for j,c in enumerate(out.columns): w3.write(0,j,c,head)
+        for i,row in enumerate(out.itertuples(index=False),1):
+            for j,v in enumerate(row):
+                fmt=money if j in [12,13] else qty if j in [2,3,4,5,6,7,8,10,11] else None
+                w3.write(i,j,v,fmt)
+        w3.set_column(0,1,18); w3.set_column(2,8,20); w3.set_column(9,9,20); w3.set_column(10,15,18); w3.freeze_panes(1,0)
+    wb.close(); return buf.getvalue()
+
+# -----------------------------
 # Session state
 # -----------------------------
 if "analysis" not in st.session_state:
@@ -2382,6 +2542,8 @@ if "copilot_prefill" not in st.session_state:
     st.session_state.copilot_prefill = ""
 if "scenario_library" not in st.session_state:
     st.session_state.scenario_library = {}
+if "mrp_bom" not in st.session_state:
+    st.session_state.mrp_bom = None
 
 
 # -----------------------------
@@ -2392,7 +2554,7 @@ if "language" not in st.session_state:
 
 _TRANSLATIONS = {
     "Spanish": {
-        "Decision Intelligence for planners · V2.0.12": "Inteligencia de decisiones para planners · V2.0.12",
+        "Decision Intelligence for planners · V2.0.13": "Inteligencia de decisiones para planners · V2.0.13",
         "Historical demand and inventory": "Histórico de demanda e inventario",
         "Upload historical demand and inventory data for analysis. CSV and Excel are supported.": "Carga datos históricos de demanda e inventario para ejecutar el análisis. Se admiten CSV y Excel.",
         "Safety stock floor (days)": "Stock de seguridad mínimo (días)",
@@ -2539,6 +2701,80 @@ _TRANSLATIONS = {
     }
 }
 
+_TRANSLATIONS["Spanish"].update({
+    "MRP": "MRP",
+    "Material Requirements Planning": "Planificación de necesidades de materiales",
+    "Convert demand into a manufacturing and component plan.": "Convierte la demanda en un plan de fabricación y necesidades de componentes.",
+    "BOM master data": "Datos maestros de BOM",
+    "Upload BOM": "Cargar BOM",
+    "BOM template": "Plantilla BOM",
+    "Download BOM template": "Descargar plantilla BOM",
+    "BOM uploaded successfully.": "BOM cargada correctamente.",
+    "BOM file must contain Parent_SKU, Component_SKU and Qty_Per columns.": "El archivo BOM debe contener las columnas Parent_SKU, Component_SKU y Qty_Per.",
+    "No BOM loaded. Use the template to prepare your manufacturing structure.": "No hay ninguna BOM cargada. Utiliza la plantilla para preparar la estructura de fabricación.",
+    "MRP planning parameters": "Parámetros de planificación MRP",
+    "Planning horizon (months)": "Horizonte de planificación (meses)",
+    "Monthly demand growth": "Crecimiento mensual de la demanda",
+    "Production safety stock (days)": "Stock de seguridad de producción (días)",
+    "Use open POs as month-1 receipts": "Usar POs abiertas como recepciones del mes 1",
+    "Parent SKUs": "SKUs padre",
+    "All parent SKUs": "Todos los SKUs padre",
+    "Run MRP": "Ejecutar MRP",
+    "MRP results": "Resultados MRP",
+    "Planned production": "Producción planificada",
+    "Component requirements": "Necesidades de componentes",
+    "Net requirements": "Necesidades netas",
+    "Planned order receipts": "Recepciones planificadas",
+    "Planned order releases": "Lanzamientos planificados",
+    "Projected ending inventory": "Inventario proyectado final",
+    "Gross requirements": "Necesidades brutas",
+    "Scheduled receipts": "Recepciones programadas",
+    "Opening inventory": "Inventario inicial",
+    "Shortage": "Faltante",
+    "MRP exception messages": "Mensajes de excepción MRP",
+    "Material shortages requiring action.": "Faltantes de material que requieren acción.",
+    "No material shortages detected in the simulated horizon.": "No se han detectado faltantes de material en el horizonte simulado.",
+    "Manufacturing KPIs": "KPIs de fabricación",
+    "Manufacturing orders": "Órdenes de fabricación",
+    "Components with shortage": "Componentes con faltante",
+    "Total component requirement": "Necesidad total de componentes",
+    "Total planned purchase": "Compra total planificada",
+    "MRP coverage": "Cobertura MRP",
+    "BOM lines": "Líneas BOM",
+    "Parent SKU": "SKU padre",
+    "Component SKU": "SKU componente",
+    "Qty per": "Cantidad por unidad",
+    "Scrap %": "% merma",
+    "Component": "Componente",
+    "Period": "Periodo",
+    "MRP Type": "Tipo MRP",
+    "Buy": "Comprar",
+    "Make": "Fabricar",
+    "Action": "Acción",
+    "Reason": "Motivo",
+    "Supplier": "Proveedor",
+    "Lead time": "Lead time",
+    "MOQ": "MOQ",
+    "Unit cost": "Coste unitario",
+    "Export MRP": "Exportar MRP",
+    "MRP workbook": "Libro MRP",
+    "The MRP engine uses the selected finished-goods forecast, BOM quantities, current component inventory and open POs to calculate time-phased material needs.": "El motor MRP utiliza el forecast seleccionado de producto terminado, las cantidades de BOM, el inventario actual de componentes y las POs abiertas para calcular las necesidades de material por periodo.",
+    "MRP is a planning simulation. Validate BOMs, routings, calendars and supplier due dates before execution.": "MRP es una simulación de planificación. Valida las BOM, rutas, calendarios y fechas de entrega de proveedores antes de ejecutar órdenes.",
+    "No parent SKUs are available in the uploaded BOM.": "No hay SKUs padre disponibles en la BOM cargada.",
+    "BOM components not found in the dataset": "Componentes de la BOM no encontrados en el dataset",
+    "BOM parents not found in the dataset": "SKUs padre de la BOM no encontrados en el dataset",
+    "Clear previous MRP results after loading a new BOM.": "Borra los resultados MRP anteriores al cargar una nueva BOM.",
+    "Invalid BOM rows were removed.": "Se han eliminado filas BOM no válidas.",
+    "Download": "Descargar",
+    "Loaded BOM": "BOM cargada",
+    "Max scrap %": "% merma máxima",
+    "BOM upload failed": "Error al cargar la BOM",
+    "Release Period": "Periodo de lanzamiento",
+    "BOM fields: Parent_SKU, Component_SKU, Qty_Per, Scrap_Pct": "Campos BOM: Parent_SKU, Component_SKU, Qty_Per, Scrap_Pct",
+    "Components": "Componentes",
+    "rows": "filas",
+})
+
 def tr(text):
     if text is None:
         return text
@@ -2574,7 +2810,7 @@ _TRANSLATIONS["Spanish"].update({
     "🔄 Period comparison": "🔄 Comparación de periodos",
     "days": "días",
     "Current": "Actual", "Previous": "Anterior",
-    "From raw supply-chain data to prioritized decisions · V2.0.12": "De datos brutos de supply chain a decisiones priorizadas · V2.0.12",
+    "From raw supply-chain data to prioritized decisions · V2.0.13": "De datos brutos de supply chain a decisiones priorizadas · V2.0.13",
     "🔴 Critical": "🔴 Crítico", "🟠 Review": "🟠 Revisar", "🛒 Purchase need": "🛒 Necesidad de compra",
     "💰 Inventory": "💰 Inventario", "📈 Next month": "📈 Próximo mes",
     "Critical inventory exposure": "Exposición de inventario crítico",
@@ -2649,8 +2885,8 @@ _TRANSLATIONS["Spanish"].update({
     "The MVP forecast uses a weighted average of the last 6 months plus a linear trend. The next iteration can add seasonality, intermittent demand and alternative models.": "El forecast del MVP utiliza una media ponderada de los últimos 6 meses más una tendencia lineal. La siguiente iteración puede añadir estacionalidad, demanda intermitente y modelos alternativos.",
     "HTML and Excel use the current filtered view. HTML includes KPIs and an executive presentation; Excel includes Summary, Action Plan and Supplier Summary with filters.": "HTML y Excel utilizan la vista filtrada actual. HTML incluye KPIs y una presentación ejecutiva; Excel incluye Summary, Action Plan y Supplier Summary con filtros.",
     "Need at least two historical periods to compare evolution.": "Se necesitan al menos dos periodos históricos para comparar la evolución.",
-    "📦 Supply Chain AI Copilot V2.0.12 — recommendations require planner validation before execution.": "📦 Supply Chain AI Copilot V2.0.12 — las recomendaciones requieren validación del planner antes de su ejecución.",
-    "Supply Chain AI Copilot V2.0.12 — recommendations require planner validation before execution.": "Supply Chain AI Copilot V2.0.12 — las recomendaciones requieren validación del planner antes de su ejecución.",
+    "📦 Supply Chain AI Copilot V2.0.13 — recommendations require planner validation before execution.": "📦 Supply Chain AI Copilot V2.0.13 — las recomendaciones requieren validación del planner antes de su ejecución.",
+    "Supply Chain AI Copilot V2.0.13 — recommendations require planner validation before execution.": "Supply Chain AI Copilot V2.0.13 — las recomendaciones requieren validación del planner antes de su ejecución.",
     "Safety stock floor": "Stock de seguridad mínimo", "Service level target": "Objetivo de nivel de servicio",
     "Language": "Idioma", "rows": "filas", "suppliers": "proveedores", "units": "unidades", "Fingerprint": "Huella",
     "Executive": "Ejecutivo", "Action Plan": "Plan de acción", "Data Quality": "Calidad de datos", "Inventory Risk": "Riesgo de inventario",
@@ -2798,7 +3034,7 @@ div[data-testid="stExpander"] { border-radius: 12px; }
 # -----------------------------
 with st.sidebar:
     st.markdown("## 📦 Supply Chain AI")
-    st.caption(tr("Decision Intelligence for planners · V2.0.12"))
+    st.caption(tr("Decision Intelligence for planners · V2.0.13"))
 
     language_choice = st.selectbox(f"🌐 {tr('Language')}", ["English", "Español"], index=0 if st.session_state.language == "English" else 1, key="language_selector")
     st.session_state.language = "English" if language_choice == "English" else "Spanish"
@@ -2906,7 +3142,7 @@ def _excel_tab_export_bytes(title, sheets, kpis=None):
         summary = wb.add_worksheet(tr("Summary"))
         summary.hide_gridlines(2)
         summary.write(0, 0, title, title_fmt)
-        summary.write(1, 0, "Exported from Supply Chain AI Copilot V2.0.12", subtitle_fmt)
+        summary.write(1, 0, "Exported from Supply Chain AI Copilot V2.0.13", subtitle_fmt)
         if kpis:
             summary.write(3, 0, "Key metrics", header_fmt)
             for i, (label, value) in enumerate(kpis.items(), start=4):
@@ -3146,7 +3382,7 @@ a["Forecast_Change_Pct"] = np.where(
 # Header
 # -----------------------------
 st.title("📦 Supply Chain AI Copilot")
-st.caption(tr("From raw supply-chain data to prioritized decisions · V2.0.12"))
+st.caption(tr("From raw supply-chain data to prioritized decisions · V2.0.13"))
 
 if not _filter_mask.any():
     st.warning(tr("No SKUs match the selected filters."))
@@ -3184,6 +3420,7 @@ tabs = st.tabs([
     "🧩 ABC/XYZ",
     "🚚 Suppliers" if st.session_state.language == "English" else "🚚 Proveedores",
     "🧪 Scenarios" if st.session_state.language == "English" else "🧪 Escenarios",
+    "🏭 MRP" if st.session_state.language == "English" else "🏭 MRP",
     "🧹 Data Quality" if st.session_state.language == "English" else "🧹 Calidad de datos",
     "📝 Action Plan" if st.session_state.language == "English" else "📝 Plan de acción",
     "🔄 Change Monitor" if st.session_state.language == "English" else "🔄 Monitor de cambios",
@@ -3813,10 +4050,130 @@ def _excel_data_quality_bytes(raw, dq):
     return buf.getvalue()
 
 
+
+# -----------------------------
+# MRP / Manufacturing
+# -----------------------------
+with tabs[8]:
+    st.subheader(f"🏭 {tr('Material Requirements Planning')}")
+    st.caption(tr("Convert demand into a manufacturing and component plan."))
+    st.info(tr("The MRP engine uses the selected finished-goods forecast, BOM quantities, current component inventory and open POs to calculate time-phased material needs."))
+
+    up1, up2 = st.columns([2,1])
+    with up1:
+        bom_upload = st.file_uploader(
+            tr("Upload BOM"), type=["csv","xlsx","xls"],
+            key="mrp_bom_uploader", help=tr("BOM fields: Parent_SKU, Component_SKU, Qty_Per, Scrap_Pct")
+        )
+    with up2:
+        template_bytes, template_type = _mrp_template_bytes()
+        st.download_button(
+            f"📥 {tr('Download BOM template')}", template_bytes,
+            ("bom_template.xlsx" if template_type=="xlsx" else "bom_template.csv") if st.session_state.language=="English" else ("plantilla_bom.xlsx" if template_type=="xlsx" else "plantilla_bom.csv"),
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" if template_type=="xlsx" else "text/csv",
+            use_container_width=True, key="mrp_bom_template"
+        )
+
+    if bom_upload is not None:
+        try:
+            uploaded_bom = normalize_bom(read_uploaded(bom_upload))
+            if uploaded_bom.empty:
+                st.error(tr("BOM file must contain Parent_SKU, Component_SKU and Qty_Per columns."))
+            else:
+                st.session_state.mrp_bom = uploaded_bom
+                st.session_state.mrp_result = None
+                st.success(tr("BOM uploaded successfully."))
+        except Exception as exc:
+            st.error(f"{tr('BOM upload failed')}: {exc}")
+
+    bom = st.session_state.mrp_bom
+    if bom is None or bom.empty:
+        st.warning(tr("No BOM loaded. Use the template to prepare your manufacturing structure."))
+    else:
+        b1,b2,b3,b4=st.columns(4)
+        b1.metric(tr("BOM lines"), len(bom))
+        b2.metric(tr("Parent SKUs"), bom["Parent_SKU"].nunique())
+        b3.metric(tr("Components"), bom["Component_SKU"].nunique())
+        b4.metric(tr("Max scrap %"), f"{bom['Scrap_Pct'].max():.1f}%")
+        st.dataframe(bom[["Parent_SKU","Component_SKU","Qty_Per","Scrap_Pct"]].head(100), use_container_width=True, hide_index=True)
+        dataset_skus=set(a_source["SKU"].astype(str))
+        missing_components=sorted(set(bom["Component_SKU"].astype(str))-dataset_skus)
+        missing_parents=sorted(set(bom["Parent_SKU"].astype(str))-dataset_skus)
+        if missing_components:
+            st.warning(f"⚠️ {tr('BOM components not found in the dataset')}: {len(missing_components)}")
+        if missing_parents:
+            st.warning(f"⚠️ {tr('BOM parents not found in the dataset')}: {len(missing_parents)}")
+
+        st.markdown(f"### ⚙️ {tr('MRP planning parameters')}")
+        p1,p2,p3,p4=st.columns(4)
+        with p1: horizon=st.slider(tr("Planning horizon (months)"),3,12,6,key="mrp_horizon")
+        with p2: demand_growth=st.slider(tr("Monthly demand growth"),-0.20,0.20,0.0,0.01,key="mrp_growth",format="%+.0f%%")
+        with p3: prod_safety=st.slider(tr("Production safety stock (days)"),0,30,5,key="mrp_safety")
+        with p4: use_open_po=st.checkbox(tr("Use open POs as month-1 receipts"),True,key="mrp_open_po")
+
+        parent_options=sorted(bom["Parent_SKU"].unique().tolist())
+        available_parent=[x for x in parent_options if x in set(a_source["SKU"].astype(str))]
+        selected_parents=st.multiselect(tr("Parent SKUs"),available_parent,default=available_parent[:min(50,len(available_parent))],key="mrp_parents",placeholder=tr("All parent SKUs"))
+        if not selected_parents: selected_parents=available_parent
+
+        if st.button(f"▶️ {tr('Run MRP')}", type="primary", use_container_width=True, key="run_mrp"):
+            with st.spinner(tr("Run MRP")):
+                full_a=analyze(raw,safety_days,service)
+                mps_df,mrp_df,mrp_meta=run_mrp(raw,full_a,bom,selected_parents,horizon,demand_growth,prod_safety,use_open_po)
+            st.session_state.mrp_result=(mps_df,mrp_df,mrp_meta)
+
+        result=st.session_state.get("mrp_result")
+        if not result:
+            st.caption(tr("Run MRP"))
+        else:
+            mps_df,mrp_df,mrp_meta=result
+            st.markdown(f"### 📊 {tr('Manufacturing KPIs')}")
+            k1,k2,k3,k4,k5=st.columns(5)
+            k1.metric(tr("Manufacturing orders"), f"{int((mps_df['Planned_Production']>0).sum()):,}")
+            k2.metric(tr("Components"), f"{mrp_meta['components']:,}")
+            k3.metric(tr("Components with shortage"), f"{mrp_meta['shortages']:,}")
+            k4.metric(tr("Total component requirement"), f"{mrp_df['Gross_Requirement'].sum():,.0f}")
+            k5.metric(tr("Total planned purchase"), f"€{mrp_meta['purchase']:,.0f}")
+
+            if not mrp_df.empty:
+                st.markdown(f"### 🏭 {tr('Planned production')}")
+                prod_view=mps_df.rename(columns={"Parent_SKU":tr("Parent SKU"),"Period":tr("Period"),"Gross_Requirement":tr("Gross requirements"),"Planned_Production":tr("Planned production")})
+                st.dataframe(prod_view,use_container_width=True,hide_index=True)
+
+                st.markdown(f"### 🧩 {tr('Component requirements')}")
+                comp_summary=mrp_df.groupby("Component_SKU",as_index=False).agg(
+                    Gross_Requirement=("Gross_Requirement","sum"),
+                    Net_Requirement=("Net_Requirement","sum"),
+                    Planned_Order_Receipt=("Planned_Order_Receipt","sum"),
+                    Shortage=("Shortage","sum"),
+                    Planned_Purchase_Value=("Planned_Purchase_Value","sum"),
+                    Supplier=("Supplier","first"), Lead_Time_Days=("Lead_Time_Days","first"), MOQ=("MOQ","first")
+                ).sort_values(["Shortage","Planned_Purchase_Value"],ascending=[False,False])
+                st.dataframe(comp_summary.rename(columns={"Component_SKU":tr("Component SKU"),"Gross_Requirement":tr("Gross requirements"),"Net_Requirement":tr("Net requirements"),"Planned_Order_Receipt":tr("Planned order receipts"),"Shortage":tr("Shortage"),"Planned_Purchase_Value":tr("Total planned purchase"),"Supplier":tr("Supplier"),"Lead_Time_Days":tr("Lead time"),"MOQ":tr("MOQ")}),use_container_width=True,hide_index=True)
+
+                st.markdown(f"### ⚠️ {tr('MRP exception messages')}")
+                exceptions=mrp_df[mrp_df["Shortage"]>0].copy()
+                if exceptions.empty:
+                    st.success(tr("No material shortages detected in the simulated horizon."))
+                else:
+                    st.warning(tr("Material shortages requiring action."))
+                    ex=exceptions[["Component_SKU","Period","Shortage","Supplier","Lead_Time_Days"]].head(100).copy()
+                    ex.columns=[tr("Component SKU"),tr("Period"),tr("Shortage"),tr("Supplier"),tr("Lead time")]
+                    st.dataframe(ex,use_container_width=True,hide_index=True)
+
+                st.markdown(f"### 📅 {tr('MRP results')}")
+                detail=mrp_df.copy()
+                detail.columns=[tr("Component SKU"),tr("Period"),tr("Opening inventory"),tr("Gross requirements"),tr("Scheduled receipts"),tr("Net requirements"),tr("Planned order receipts"),tr("Projected ending inventory"),tr("Shortage"),tr("Supplier"),tr("Lead time"),tr("MOQ"),tr("Unit cost"),tr("Total planned purchase"),tr("Release Period"),tr("Action")]
+                st.dataframe(detail,use_container_width=True,hide_index=True)
+
+                mrp_export=_mrp_export_bytes(mps_df,mrp_df,mrp_meta,st.session_state.language)
+                if mrp_export:
+                    st.download_button(f"📗 {tr('Export MRP')}",mrp_export,"mrp_manufacturing_plan.xlsx" if st.session_state.language=="English" else "plan_mrp_fabricacion.xlsx","application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",use_container_width=True,key="mrp_export")
+            st.info(tr("MRP is a planning simulation. Validate BOMs, routings, calendars and supplier due dates before execution."))
 # -----------------------------
 # Data Quality
 # -----------------------------
-with tabs[8]:
+with tabs[9]:
     st.subheader(f"🧹 {tr('Data Quality')}")
     st.caption(tr("Checks the data before operational decisions are used."))
 
@@ -3878,7 +4235,7 @@ with tabs[8]:
 # -----------------------------
 # Action Plan
 # -----------------------------
-with tabs[9]:
+with tabs[10]:
     st.subheader(f"📝 {tr('Weekly Action Plan')}")
     st.caption(tr("Planner-ready worklist generated by the Decision Engine."))
 
@@ -3979,7 +4336,7 @@ with tabs[9]:
 # -----------------------------
 # Change Monitor
 # -----------------------------
-with tabs[10]:
+with tabs[11]:
     st.subheader(tr("🔄 What changed?"))
     if not comparison_meta.get("has_comparison"):
         st.info(tr("Need at least two historical periods to compare evolution."))
@@ -4067,7 +4424,7 @@ with tabs[10]:
 # -----------------------------
 # Copilot
 # -----------------------------
-with tabs[11]:
+with tabs[12]:
     st.subheader("🤖 Your Supply Chain Copilot")
     if st.session_state.get("copilot_prefill"):
         pending = st.session_state["copilot_prefill"]
@@ -4131,7 +4488,7 @@ with tabs[11]:
 # -----------------------------
 # Export
 # -----------------------------
-with tabs[12]:
+with tabs[13]:
     st.subheader("📤 Reporting Center")
     st.caption(tr("Visual HTML reports and professional Excel workbooks containing the same decision-ready information."))
 
@@ -4257,4 +4614,4 @@ with tabs[12]:
 
 
 st.divider()
-st.caption("Supply Chain AI Copilot V2.0.12 — recommendations require planner validation before execution.")
+st.caption(tr("Supply Chain AI Copilot V2.0.13 — recommendations require planner validation before execution."))
