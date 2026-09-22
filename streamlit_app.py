@@ -1,5 +1,5 @@
 
-import io, os, math, html as html_lib, zipfile, inspect
+import io, os, math, html as html_lib, zipfile, inspect, hashlib, inspect
 from datetime import date, timedelta, datetime
 from pathlib import Path
 import pandas as pd
@@ -663,7 +663,7 @@ _REPORT_TRANSLATIONS_ES = {
     "Planner-ready operational worklist with ownership and deadlines.":"Lista operativa preparada para el planner, con responsables y fechas límite.",
     "Supplier concentration, service exposure and purchasing exposure.":"Concentración de proveedores, exposición de servicio y exposición de compras.",
     "Generated":"Generado", "Decision support only. Validate purchase execution and supplier commitments before release.":"Solo para soporte a la decisión. Valida la ejecución de compras y los compromisos de los proveedores antes de su liberación.",
-    "Supply Chain AI Copilot V2.0.22":"Supply Chain AI Copilot V2.0.22",
+    "Supply Chain AI Copilot V2.0.25":"Supply Chain AI Copilot V2.0.25",
     "No comparable periods are available.":"No hay periodos comparables disponibles.",
 }
 
@@ -716,7 +716,7 @@ td{{padding:10px;border-bottom:1px solid var(--line);vertical-align:top}}
 <div class="header">
 <h1>{html_lib.escape(title)}</h1>
 <p>{html_lib.escape(subtitle)}</p>
-<div class="meta">Generated {generated} · Supply Chain AI Copilot V2.0.22</div>
+<div class="meta">Generated {generated} · Supply Chain AI Copilot V2.0.25</div>
 </div>
 {body}
 <div class="footer">Decision support only. Validate purchase execution and supplier commitments before release.</div>
@@ -2672,7 +2672,7 @@ _TRANSLATIONS = {
         "Generate reports": "Generar informes",
         "Generating reports...": "Generando informes...",
         "Generate reports to create the HTML and Excel downloads. This avoids heavy report generation on every interaction.": "Genera los informes para crear las descargas HTML y Excel. Esto evita generar informes pesados en cada interacción.",
-        "Decision Intelligence for planners · V2.0.22": "Inteligencia de decisiones para planners · V2.0.22",
+        "Decision Intelligence for planners · V2.0.25": "Inteligencia de decisiones para planners · V2.0.25",
         "Historical demand and inventory": "Histórico de demanda e inventario",
         "Upload historical demand and inventory data for analysis. CSV and Excel are supported.": "Carga datos históricos de demanda e inventario para ejecutar el análisis. Se admiten CSV y Excel.",
         "Safety stock floor (days)": "Stock de seguridad mínimo (días)",
@@ -2954,7 +2954,7 @@ _TRANSLATIONS["Spanish"].update({
     "🔄 Period comparison": "🔄 Comparación de periodos",
     "days": "días",
     "Current": "Actual", "Previous": "Anterior",
-    "From raw supply-chain data to prioritized decisions · V2.0.23": "De datos brutos de supply chain a decisiones priorizadas · V2.0.23",
+    "From raw supply-chain data to prioritized decisions · V2.0.25": "De datos brutos de supply chain a decisiones priorizadas · V2.0.25",
     "🔴 Critical": "🔴 Crítico", "🟠 Review": "🟠 Revisar", "🛒 Purchase need": "🛒 Necesidad de compra",
     "💰 Inventory": "💰 Inventario", "📈 Next month": "📈 Próximo mes",
     "Critical inventory exposure": "Exposición de inventario crítico",
@@ -3029,8 +3029,8 @@ _TRANSLATIONS["Spanish"].update({
     "The MVP forecast uses a weighted average of the last 6 months plus a linear trend. The next iteration can add seasonality, intermittent demand and alternative models.": "El forecast del MVP utiliza una media ponderada de los últimos 6 meses más una tendencia lineal. La siguiente iteración puede añadir estacionalidad, demanda intermitente y modelos alternativos.",
     "HTML and Excel use the current filtered view. HTML includes KPIs and an executive presentation; Excel includes Summary, Action Plan and Supplier Summary with filters.": "HTML y Excel utilizan la vista filtrada actual. HTML incluye KPIs y una presentación ejecutiva; Excel incluye Summary, Action Plan y Supplier Summary con filtros.",
     "Need at least two historical periods to compare evolution.": "Se necesitan al menos dos periodos históricos para comparar la evolución.",
-    "📦 Supply Chain AI Copilot V2.0.22 — recommendations require planner validation before execution.": "📦 Supply Chain AI Copilot V2.0.22 — las recomendaciones requieren validación del planner antes de su ejecución.",
-    "Supply Chain AI Copilot V2.0.22 — recommendations require planner validation before execution.": "Supply Chain AI Copilot V2.0.22 — las recomendaciones requieren validación del planner antes de su ejecución.",
+    "📦 Supply Chain AI Copilot V2.0.25 — recommendations require planner validation before execution.": "📦 Supply Chain AI Copilot V2.0.25 — las recomendaciones requieren validación del planner antes de su ejecución.",
+    "Supply Chain AI Copilot V2.0.25 — recommendations require planner validation before execution.": "Supply Chain AI Copilot V2.0.25 — las recomendaciones requieren validación del planner antes de su ejecución.",
     "Safety stock floor": "Stock de seguridad mínimo", "Service level target": "Objetivo de nivel de servicio",
     "Language": "Idioma", "rows": "filas", "suppliers": "proveedores", "units": "unidades", "Fingerprint": "Huella",
     "Executive": "Ejecutivo", "Action Plan": "Plan de acción", "Data Quality": "Calidad de datos", "Inventory Risk": "Riesgo de inventario",
@@ -3158,71 +3158,95 @@ def localize_df(df):
 # before localization, so English/Spanish display never affects calculations.
 _original_st_dataframe = st.dataframe
 
-# Monotonic render counter guarantees unique widget keys even when multiple
-# tables share the same columns/shape or are rendered from cached functions.
-_dataframe_render_counter = 0
+# Robust per-table filter layer.
+# Widget IDs are derived from the caller source line, with a per-run occurrence
+# counter for the rare case where the same dataframe call is executed in a loop.
+_scai_filter_occurrences = {}
+
 
 def _filterable_dataframe(data, *args, **kwargs):
-    global _dataframe_render_counter
-    _dataframe_render_counter += 1
-    render_id = _dataframe_render_counter
     if not isinstance(data, pd.DataFrame):
         return _original_st_dataframe(data, *args, **kwargs)
 
-    df = data.copy()
-    # Build a deterministic, compact key without depending on caller stack frames.
-    explicit_key = kwargs.get("key")
-    if explicit_key:
-        base_key = str(explicit_key)
-    else:
-        cols_key = "|".join(str(c) for c in df.columns)
-        base_key = f"table_{len(df)}_{len(df.columns)}_{cols_key}"
-    safe_base_key = "".join(ch if ch.isalnum() or ch in "_-" else "_" for ch in base_key)[:90]
-    # Always append the render id. Using only table shape/columns can produce
-    # identical keys for different tables, which Streamlit rejects.
-    safe_key = f"{safe_base_key}__render_{render_id}"
+    caller = inspect.currentframe().f_back
+    caller_file = caller.f_code.co_filename if caller is not None else "unknown"
+    caller_line = caller.f_lineno if caller is not None else 0
+    callsite = f"{caller_file}:{caller_line}"
+    occurrence = _scai_filter_occurrences.get(callsite, 0) + 1
+    _scai_filter_occurrences[callsite] = occurrence
+    digest = hashlib.sha1(callsite.encode("utf-8")).hexdigest()[:12]
+    table_id = f"{digest}_{occurrence}"
+    df_original = data.copy()
+    df = df_original.copy()
 
+    is_es = st.session_state.get("language", "English") == "Spanish"
     if len(df.columns) > 0 and len(df) > 0:
-        is_es = st.session_state.get("language", "English") == "Spanish"
         filter_label = "🔎 Filtros de cabecera" if is_es else "🔎 Header filters"
-        helper_label = ("Filtra cada columna antes de revisar la tabla. Deja el campo vacío para no aplicar filtro."
-                        if is_es else "Filter each column before reviewing the table. Clear a filter by leaving it empty.")
-        with st.expander(filter_label, expanded=False):
-            st.caption(helper_label)
+        helper_label = (
+            "Filtra cada columna. Deja el campo vacío para no aplicar el filtro."
+            if is_es else
+            "Filter each column. Leave a field empty to keep that column unfiltered."
+        )
+        # Do not use an expander key or a generated dataframe key here.
+        # Streamlit's widgets are keyed explicitly below.
+        st.markdown(f"**{filter_label}**")
+        st.caption(helper_label)
+        with st.container(border=True):
             filter_cols = st.columns(min(4, len(df.columns)))
             for idx, col in enumerate(list(df.columns)):
                 col_name = str(col)
                 with filter_cols[idx % len(filter_cols)]:
                     st.markdown(f"**{col_name}**")
-                    series = df[col]
-                    widget_key = f"{safe_key}__filter__{idx}"
+                    series = df_original[col]
+                    key_base = f"__scai_table_filter__{table_id}__{idx}"
+
                     if pd.api.types.is_numeric_dtype(series):
                         vals = pd.to_numeric(series, errors="coerce").dropna()
                         if vals.empty:
+                            st.caption("—")
                             continue
-                        lo, hi = float(vals.min()), float(vals.max())
+                        lo = float(vals.min())
+                        hi = float(vals.max())
                         if lo == hi:
                             st.caption(f"= {lo:g}")
                             continue
                         cmin, cmax = st.columns(2)
                         min_label = "Mín." if is_es else "Min"
                         max_label = "Máx." if is_es else "Max"
-                        min_val = cmin.number_input(min_label, value=lo, min_value=lo, max_value=hi, key=widget_key+"_min")
-                        max_val = cmax.number_input(max_label, value=hi, min_value=lo, max_value=hi, key=widget_key+"_max")
-                        if min_val > max_val:
-                            st.warning("El mínimo no puede ser mayor que el máximo." if is_es else "Min cannot exceed Max")
-                        else:
+                        min_val = cmin.number_input(
+                            min_label, min_value=lo, max_value=hi, value=lo,
+                            key=key_base + "__min"
+                        )
+                        max_val = cmax.number_input(
+                            max_label, min_value=lo, max_value=hi, value=hi,
+                            key=key_base + "__max"
+                        )
+                        if min_val <= max_val:
                             numeric = pd.to_numeric(df[col], errors="coerce")
                             df = df[numeric.between(min_val, max_val, inclusive="both")]
+                        else:
+                            st.warning(
+                                "El mínimo no puede ser mayor que el máximo."
+                                if is_es else "Min cannot exceed Max"
+                            )
                     else:
-                        query = st.text_input("Contiene" if is_es else "Contains", key=widget_key,
-                                              placeholder="Buscar..." if is_es else "Search...")
+                        query = st.text_input(
+                            "Contiene" if is_es else "Contains",
+                            value="",
+                            key=key_base + "__text",
+                            placeholder="Buscar..." if is_es else "Search..."
+                        )
                         if query:
-                            df = df[df[col].astype(str).str.contains(query, case=False, na=False)]
-            rows_label = "Filas mostradas" if is_es else "Rows shown"
-            st.caption(f"{rows_label}: {len(df):,} / {len(data):,}")
+                            mask = df[col].astype(str).str.contains(
+                                query, case=False, na=False, regex=False
+                            )
+                            df = df[mask]
 
-    # Localize only the final display dataframe. Calculations remain canonical.
+            rows_label = "Filas mostradas" if is_es else "Rows shown"
+            st.caption(f"{rows_label}: {len(df):,} / {len(df_original):,}")
+
+    # Preserve any explicit dataframe key supplied by the caller. If none is
+    # supplied, let Streamlit generate the dataframe element id naturally.
     return _original_st_dataframe(localize_df(df), *args, **kwargs)
 
 st.dataframe = _filterable_dataframe
@@ -3262,7 +3286,7 @@ div[data-testid="stExpander"] { border-radius: 12px; }
 # -----------------------------
 with st.sidebar:
     st.markdown("## 📦 Supply Chain AI")
-    st.caption(tr("Decision Intelligence for planners · V2.0.22"))
+    st.caption(tr("Decision Intelligence for planners · V2.0.25"))
 
     language_choice = st.selectbox(f"🌐 {tr('Language')}", ["English", "Español"], index=0 if st.session_state.language == "English" else 1, key="language_selector")
     st.session_state.language = "English" if language_choice == "English" else "Spanish"
@@ -3371,7 +3395,7 @@ def _excel_tab_export_bytes(title, sheets, kpis=None):
         summary = wb.add_worksheet(tr("Summary"))
         summary.hide_gridlines(2)
         summary.write(0, 0, title, title_fmt)
-        summary.write(1, 0, "Exported from Supply Chain AI Copilot V2.0.22", subtitle_fmt)
+        summary.write(1, 0, "Exported from Supply Chain AI Copilot V2.0.25", subtitle_fmt)
         if kpis:
             summary.write(3, 0, "Key metrics", header_fmt)
             for i, (label, value) in enumerate(kpis.items(), start=4):
@@ -3620,7 +3644,7 @@ a["Forecast_Change_Pct"] = np.where(
 # Header
 # -----------------------------
 st.title("📦 Supply Chain AI Copilot")
-st.caption(tr("From raw supply-chain data to prioritized decisions · V2.0.23"))
+st.caption(tr("From raw supply-chain data to prioritized decisions · V2.0.25"))
 
 if not _filter_mask.any():
     st.warning(tr("No SKUs match the selected filters."))
@@ -4926,4 +4950,4 @@ with tabs[13]:
         st.info("Raw CSV exports remain removed from the reporting workflow. HTML and Excel are now the primary shareable outputs.")
 
 st.divider()
-st.caption(tr("Supply Chain AI Copilot V2.0.22 — recommendations require planner validation before execution."))
+st.caption(tr("Supply Chain AI Copilot V2.0.25 — recommendations require planner validation before execution."))
