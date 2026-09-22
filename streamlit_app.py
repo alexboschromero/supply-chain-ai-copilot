@@ -3158,7 +3158,14 @@ def localize_df(df):
 # before localization, so English/Spanish display never affects calculations.
 _original_st_dataframe = st.dataframe
 
+# Monotonic render counter guarantees unique widget keys even when multiple
+# tables share the same columns/shape or are rendered from cached functions.
+_dataframe_render_counter = 0
+
 def _filterable_dataframe(data, *args, **kwargs):
+    global _dataframe_render_counter
+    _dataframe_render_counter += 1
+    render_id = _dataframe_render_counter
     if not isinstance(data, pd.DataFrame):
         return _original_st_dataframe(data, *args, **kwargs)
 
@@ -3169,8 +3176,11 @@ def _filterable_dataframe(data, *args, **kwargs):
         base_key = str(explicit_key)
     else:
         cols_key = "|".join(str(c) for c in df.columns)
-        base_key = f"table_{abs(hash(cols_key))}_{len(df)}_{len(df.columns)}"
-    safe_key = "".join(ch if ch.isalnum() or ch in "_-" else "_" for ch in base_key)[:120]
+        base_key = f"table_{len(df)}_{len(df.columns)}_{cols_key}"
+    safe_base_key = "".join(ch if ch.isalnum() or ch in "_-" else "_" for ch in base_key)[:90]
+    # Always append the render id. Using only table shape/columns can produce
+    # identical keys for different tables, which Streamlit rejects.
+    safe_key = f"{safe_base_key}__render_{render_id}"
 
     if len(df.columns) > 0 and len(df) > 0:
         is_es = st.session_state.get("language", "English") == "Spanish"
