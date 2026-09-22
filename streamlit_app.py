@@ -659,7 +659,7 @@ _REPORT_TRANSLATIONS_ES = {
     "Planner-ready operational worklist with ownership and deadlines.":"Lista operativa preparada para el planner, con responsables y fechas límite.",
     "Supplier concentration, service exposure and purchasing exposure.":"Concentración de proveedores, exposición de servicio y exposición de compras.",
     "Generated":"Generado", "Decision support only. Validate purchase execution and supplier commitments before release.":"Solo para soporte a la decisión. Valida la ejecución de compras y los compromisos de los proveedores antes de su liberación.",
-    "Supply Chain AI Copilot V2.0.10":"Supply Chain AI Copilot V2.0.10",
+    "Supply Chain AI Copilot V2.0.11":"Supply Chain AI Copilot V2.0.11",
     "No comparable periods are available.":"No hay periodos comparables disponibles.",
 }
 
@@ -712,7 +712,7 @@ td{{padding:10px;border-bottom:1px solid var(--line);vertical-align:top}}
 <div class="header">
 <h1>{html_lib.escape(title)}</h1>
 <p>{html_lib.escape(subtitle)}</p>
-<div class="meta">Generated {generated} · Supply Chain AI Copilot V2.0.10</div>
+<div class="meta">Generated {generated} · Supply Chain AI Copilot V2.0.11</div>
 </div>
 {body}
 <div class="footer">Decision support only. Validate purchase execution and supplier commitments before release.</div>
@@ -2390,7 +2390,7 @@ if "language" not in st.session_state:
 
 _TRANSLATIONS = {
     "Spanish": {
-        "Decision Intelligence for planners · V2.0.10": "Inteligencia de decisiones para planners · V2.0.10",
+        "Decision Intelligence for planners · V2.0.11": "Inteligencia de decisiones para planners · V2.0.11",
         "Historical demand and inventory": "Histórico de demanda e inventario",
         "Upload historical demand and inventory data for analysis. CSV and Excel are supported.": "Carga datos históricos de demanda e inventario para ejecutar el análisis. Se admiten CSV y Excel.",
         "Safety stock floor (days)": "Stock de seguridad mínimo (días)",
@@ -2440,6 +2440,26 @@ _TRANSLATIONS = {
         "Demand outlook": "Perspectiva de demanda",
         "Segmentation": "Segmentación",
         "Policy simulator": "Simulador de políticas",
+        "Demand & supply assumptions": "Supuestos de demanda y suministro",
+        "Demand multiplier": "Multiplicador de demanda",
+        "Demand volatility multiplier": "Multiplicador de volatilidad de demanda",
+        "Available stock multiplier": "Multiplicador de stock disponible",
+        "Open PO reliability": "Fiabilidad de las órdenes abiertas",
+        "Unit cost multiplier": "Multiplicador del coste unitario",
+        "MOQ multiplier": "Multiplicador de MOQ",
+        "Planning policy": "Política de planificación",
+        "Lead time buffer (days)": "Buffer de lead time (días)",
+        "Scenario impact": "Impacto del escenario",
+        "Scenario decision impact": "Impacto del escenario en las decisiones",
+        "Current policy": "Política actual",
+        "Scenario": "Escenario",
+        "Change": "Cambio",
+        "Metric": "Métrica",
+        "Action changes": "Cambios de acción",
+        "Service risk": "Riesgo de servicio",
+        "Excess inventory": "Exceso de inventario",
+        "Median days cover": "Cobertura mediana (días)",
+        "Scenario results are simulations only. Validate the impact before changing the live planning policy.": "Los resultados del escenario son únicamente simulaciones. Valida el impacto antes de cambiar la política de planificación activa.",
         "Simulate decisions before changing the policy.": "Simula decisiones antes de cambiar la política.",
         "Lead time multiplier": "Multiplicador de lead time",
         "Data Quality": "Calidad de datos",
@@ -2520,7 +2540,7 @@ _TRANSLATIONS["Spanish"].update({
     "🔄 Period comparison": "🔄 Comparación de periodos",
     "days": "días",
     "Current": "Actual", "Previous": "Anterior",
-    "From raw supply-chain data to prioritized decisions · V2.0.10": "De datos brutos de supply chain a decisiones priorizadas · V2.0.10",
+    "From raw supply-chain data to prioritized decisions · V2.0.11": "De datos brutos de supply chain a decisiones priorizadas · V2.0.11",
     "🔴 Critical": "🔴 Crítico", "🟠 Review": "🟠 Revisar", "🛒 Purchase need": "🛒 Necesidad de compra",
     "💰 Inventory": "💰 Inventario", "📈 Next month": "📈 Próximo mes",
     "Critical inventory exposure": "Exposición de inventario crítico",
@@ -2595,8 +2615,8 @@ _TRANSLATIONS["Spanish"].update({
     "The MVP forecast uses a weighted average of the last 6 months plus a linear trend. The next iteration can add seasonality, intermittent demand and alternative models.": "El forecast del MVP utiliza una media ponderada de los últimos 6 meses más una tendencia lineal. La siguiente iteración puede añadir estacionalidad, demanda intermitente y modelos alternativos.",
     "HTML and Excel use the current filtered view. HTML includes KPIs and an executive presentation; Excel includes Summary, Action Plan and Supplier Summary with filters.": "HTML y Excel utilizan la vista filtrada actual. HTML incluye KPIs y una presentación ejecutiva; Excel incluye Summary, Action Plan y Supplier Summary con filtros.",
     "Need at least two historical periods to compare evolution.": "Se necesitan al menos dos periodos históricos para comparar la evolución.",
-    "📦 Supply Chain AI Copilot V2.0.10 — recommendations require planner validation before execution.": "📦 Supply Chain AI Copilot V2.0.10 — las recomendaciones requieren validación del planner antes de su ejecución.",
-    "Supply Chain AI Copilot V2.0.10 — recommendations require planner validation before execution.": "Supply Chain AI Copilot V2.0.10 — las recomendaciones requieren validación del planner antes de su ejecución.",
+    "📦 Supply Chain AI Copilot V2.0.11 — recommendations require planner validation before execution.": "📦 Supply Chain AI Copilot V2.0.11 — las recomendaciones requieren validación del planner antes de su ejecución.",
+    "Supply Chain AI Copilot V2.0.11 — recommendations require planner validation before execution.": "Supply Chain AI Copilot V2.0.11 — las recomendaciones requieren validación del planner antes de su ejecución.",
     "Safety stock floor": "Stock de seguridad mínimo", "Service level target": "Objetivo de nivel de servicio",
     "Language": "Idioma", "rows": "filas", "suppliers": "proveedores", "units": "unidades", "Fingerprint": "Huella",
     "Executive": "Ejecutivo", "Action Plan": "Plan de acción", "Data Quality": "Calidad de datos", "Inventory Risk": "Riesgo de inventario",
@@ -2744,7 +2764,7 @@ div[data-testid="stExpander"] { border-radius: 12px; }
 # -----------------------------
 with st.sidebar:
     st.markdown("## 📦 Supply Chain AI")
-    st.caption(tr("Decision Intelligence for planners · V2.0.10"))
+    st.caption(tr("Decision Intelligence for planners · V2.0.11"))
 
     language_choice = st.selectbox(f"🌐 {tr('Language')}", ["English", "Español"], index=0 if st.session_state.language == "English" else 1, key="language_selector")
     st.session_state.language = "English" if language_choice == "English" else "Spanish"
@@ -2852,7 +2872,7 @@ def _excel_tab_export_bytes(title, sheets, kpis=None):
         summary = wb.add_worksheet(tr("Summary"))
         summary.hide_gridlines(2)
         summary.write(0, 0, title, title_fmt)
-        summary.write(1, 0, "Exported from Supply Chain AI Copilot V2.0.10", subtitle_fmt)
+        summary.write(1, 0, "Exported from Supply Chain AI Copilot V2.0.11", subtitle_fmt)
         if kpis:
             summary.write(3, 0, "Key metrics", header_fmt)
             for i, (label, value) in enumerate(kpis.items(), start=4):
@@ -3092,7 +3112,7 @@ a["Forecast_Change_Pct"] = np.where(
 # Header
 # -----------------------------
 st.title("📦 Supply Chain AI Copilot")
-st.caption(tr("From raw supply-chain data to prioritized decisions · V2.0.10"))
+st.caption(tr("From raw supply-chain data to prioritized decisions · V2.0.11"))
 
 if not _filter_mask.any():
     st.warning(tr("No SKUs match the selected filters."))
@@ -3507,23 +3527,96 @@ with tabs[6]:
 with tabs[7]:
     st.subheader(f"🧪 {tr('Policy simulator')}")
     st.caption(tr("Simulate decisions before changing the policy."))
-    s1, s2 = st.columns(2)
-    with s1:
-        sim_safety = st.slider(tr("Safety stock floor"), 0, 90, safety_days, key="sim_safety")
-    with s2:
-        sim_lead = st.slider(tr("Lead time multiplier"), .5, 2.0, 1.0, .05, key="sim_lead")
 
+    # Scenario controls are deliberately separated from the base planning policy:
+    # the original dataset and current policy remain unchanged.
+    st.markdown(f"**{tr('Demand & supply assumptions')}**")
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        sim_demand = st.slider(tr("Demand multiplier"), 0.50, 1.50, 1.00, 0.05, key="sim_demand")
+        sim_volatility = st.slider(tr("Demand volatility multiplier"), 0.50, 2.00, 1.00, 0.05, key="sim_volatility")
+    with c2:
+        sim_stock = st.slider(tr("Available stock multiplier"), 0.50, 1.20, 1.00, 0.05, key="sim_stock")
+        sim_po = st.slider(tr("Open PO reliability"), 0.00, 1.20, 1.00, 0.05, key="sim_po")
+    with c3:
+        sim_cost = st.slider(tr("Unit cost multiplier"), 0.80, 1.20, 1.00, 0.05, key="sim_cost")
+        sim_moq = st.slider(tr("MOQ multiplier"), 0.50, 2.00, 1.00, 0.05, key="sim_moq")
+
+    st.markdown(f"**{tr('Planning policy')}**")
+    p1, p2, p3, p4 = st.columns(4)
+    with p1:
+        sim_safety = st.slider(tr("Safety stock floor"), 0, 90, safety_days, key="sim_safety")
+    with p2:
+        sim_service = st.slider(tr("Service level"), 0.90, 0.99, float(service), 0.01, key="sim_service")
+    with p3:
+        sim_lead = st.slider(tr("Lead time multiplier"), .50, 2.00, 1.00, .05, key="sim_lead")
+    with p4:
+        sim_lead_buffer = st.slider(tr("Lead time buffer (days)"), 0, 30, 0, 1, key="sim_lead_buffer")
+
+    # Build a deterministic scenario dataset. Demand volatility changes the
+    # dispersion around each SKU's mean, allowing a more realistic risk test.
     sim = raw.copy()
-    sim["Lead_Time_Days"] = pd.to_numeric(sim["Lead_Time_Days"], errors="coerce").fillna(0)*sim_lead
-    sim_a = analyze(sim, sim_safety, service)
+    numeric_cols = ["Sales", "Stock", "Open_PO", "Lead_Time_Days", "MOQ", "Unit_Cost"]
+    for col in numeric_cols:
+        sim[col] = pd.to_numeric(sim[col], errors="coerce").fillna(0)
+
+    sim["Sales"] = sim["Sales"] * sim_demand
+    if sim_volatility != 1.0:
+        sku_mean = sim.groupby("SKU")["Sales"].transform("mean")
+        sim["Sales"] = (sku_mean + (sim["Sales"] - sku_mean) * sim_volatility).clip(lower=0)
+    sim["Stock"] = sim["Stock"] * sim_stock
+    sim["Open_PO"] = sim["Open_PO"] * sim_po
+    sim["Lead_Time_Days"] = sim["Lead_Time_Days"] * sim_lead + sim_lead_buffer
+    sim["MOQ"] = sim["MOQ"] * sim_moq
+    sim["Unit_Cost"] = sim["Unit_Cost"] * sim_cost
+
+    sim_a = analyze(sim, sim_safety, sim_service)
     base_val = float(a["Purchase_Value"].sum())
     sim_val = float(sim_a["Purchase_Value"].sum())
-    base_risk = K["critical"]
-    sim_risk = int((sim_a["Status"]=="🔴 CRITICAL").sum())
-    m1,m2,m3 = st.columns(3)
-    m1.metric("Purchase need", f"€{sim_val:,.0f}", f"{sim_val-base_val:+,.0f}")
-    m2.metric("Critical SKUs", sim_risk, f"{sim_risk-base_risk:+d}")
-    m3.metric("Required stock value", f"€{(sim_a['Required_Stock']*sim_a['Unit_Cost']).sum():,.0f}")
+    base_risk = int((a["Status"] == "🔴 CRITICAL").sum())
+    sim_risk = int((sim_a["Status"] == "🔴 CRITICAL").sum())
+    base_service_risk = float(a["Service_Risk_Value"].sum())
+    sim_service_risk = float(sim_a["Service_Risk_Value"].sum())
+    base_excess = float(a["Excess_Inventory_Value"].sum())
+    sim_excess = float(sim_a["Excess_Inventory_Value"].sum())
+    base_required = float((a["Required_Stock"] * a["Unit_Cost"]).sum())
+    sim_required = float((sim_a["Required_Stock"] * sim_a["Unit_Cost"]).sum())
+    base_cover = float(a["Days_Cover"].replace([np.inf, -np.inf], np.nan).median())
+    sim_cover = float(sim_a["Days_Cover"].replace([np.inf, -np.inf], np.nan).median())
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric(tr("Purchase need"), f"€{sim_val:,.0f}", f"€{sim_val-base_val:+,.0f}")
+    m2.metric(tr("Critical SKUs"), sim_risk, f"{sim_risk-base_risk:+d}")
+    m3.metric(tr("Service risk"), f"€{sim_service_risk:,.0f}", f"€{sim_service_risk-base_service_risk:+,.0f}")
+    m4.metric(tr("Required stock value"), f"€{sim_required:,.0f}", f"€{sim_required-base_required:+,.0f}")
+
+    st.markdown(f"**{tr('Scenario impact')}**")
+    impact = pd.DataFrame([
+        [tr("Purchase need"), base_val, sim_val, sim_val-base_val],
+        [tr("Critical SKUs"), base_risk, sim_risk, sim_risk-base_risk],
+        [tr("Service risk"), base_service_risk, sim_service_risk, sim_service_risk-base_service_risk],
+        [tr("Excess inventory"), base_excess, sim_excess, sim_excess-base_excess],
+        [tr("Required stock value"), base_required, sim_required, sim_required-base_required],
+        [tr("Median days cover"), base_cover, sim_cover, sim_cover-base_cover],
+    ], columns=[tr("Metric"), tr("Current policy"), tr("Scenario"), tr("Change")])
+    st.dataframe(impact, use_container_width=True, hide_index=True)
+
+    st.markdown(f"**{tr('Scenario decision impact')}**")
+    scenario_view = sim_a[[
+        "SKU","Description","Supplier","Status","Action","Days_Cover",
+        "Lead_Time_Days","Recommended_Order","Purchase_Value",
+        "Service_Risk_Value","Excess_Inventory_Value","Decision_Confidence"
+    ]].copy().sort_values(["Status","Purchase_Value"], ascending=[True, False])
+    st.dataframe(scenario_view.head(100), use_container_width=True, hide_index=True)
+
+    base_actions = a.set_index("SKU")["Action"].to_dict()
+    changed_actions = int(sum(base_actions.get(sku) != action for sku, action in zip(sim_a["SKU"], sim_a["Action"])))
+    c1, c2, c3 = st.columns(3)
+    c1.metric(tr("Action changes"), changed_actions)
+    c2.metric(tr("Excess inventory"), f"€{sim_excess:,.0f}", f"€{sim_excess-base_excess:+,.0f}")
+    c3.metric(tr("Median days cover"), f"{sim_cover:.1f} d", f"{sim_cover-base_cover:+.1f} d")
+
+    st.info(tr("Scenario results are simulations only. Validate the impact before changing the live planning policy."))
 
 
 def _excel_data_quality_bytes(raw, dq):
@@ -4021,4 +4114,4 @@ with tabs[12]:
 
 
 st.divider()
-st.caption("Supply Chain AI Copilot V2.0.10 — recommendations require planner validation before execution.")
+st.caption("Supply Chain AI Copilot V2.0.11 — recommendations require planner validation before execution.")
