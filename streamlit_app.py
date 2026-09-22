@@ -33,6 +33,127 @@ REQUIRED = [
 def sample_data():
     return pd.read_csv(Path(__file__).parent/"data"/"sample_history.csv")
 
+
+def read_uploaded(uploaded_file):
+    if uploaded_file is None:
+        return None
+    name = uploaded_file.name.lower()
+    data = uploaded_file.getvalue()
+    if name.endswith((".xlsx", ".xls")):
+        return pd.read_excel(io.BytesIO(data))
+    return pd.read_csv(io.BytesIO(data))
+
+def normalize_columns(df):
+    aliases = {
+        "sku": "SKU",
+        "item": "SKU",
+        "item_code": "SKU",
+        "article": "SKU",
+        "description": "Description",
+        "product": "Description",
+        "supplier": "Supplier",
+        "vendor": "Supplier",
+        "year": "Year",
+        "month": "Month",
+        "sales": "Sales",
+        "units_sold": "Sales",
+        "demand": "Sales",
+        "stock": "Stock",
+        "inventory": "Stock",
+        "open_po": "Open_PO",
+        "open_po_units": "Open_PO",
+        "lead_time": "Lead_Time_Days",
+        "lead_time_days": "Lead_Time_Days",
+        "lt_days": "Lead_Time_Days",
+        "moq": "MOQ",
+        "unit_cost": "Unit_Cost",
+        "cost": "Unit_Cost",
+    }
+    rename = {}
+    for c in df.columns:
+        key = str(c).strip().lower().replace(" ", "_")
+        if key in aliases:
+            rename[c] = aliases[key]
+    return df.rename(columns=rename)
+
+def data_quality_report(df):
+    rows = []
+    for col in REQUIRED:
+        if col not in df.columns:
+            rows.append({"Field": col, "Status": "MISSING", "Issue": "Required field not found"})
+            continue
+        nulls = int(df[col].isna().sum())
+        rows.append({
+            "Field": col,
+            "Status": "OK" if nulls == 0 else "WARNING",
+            "Issue": "No missing values" if nulls == 0 else f"{nulls} missing values"
+        })
+
+    dupes = int(df.duplicated(subset=["SKU","Year","Month"]).sum()) if all(
+        c in df.columns for c in ["SKU","Year","Month"]
+    ) else 0
+    rows.append({
+        "Field": "SKU-Year-Month",
+        "Status": "OK" if dupes == 0 else "WARNING",
+        "Issue": "No duplicate periods" if dupes == 0 else f"{dupes} duplicate rows"
+    })
+    return pd.DataFrame(rows)
+
+def build_action_plan(a):
+    x = a.sort_values("Decision_Score", ascending=False).copy()
+    plan = []
+    for _, r in x.iterrows():
+        if r["Action"] == "BUY_NOW":
+            action = f"BUY {r['Recommended_Order']:.0f} units"
+            owner = "Planner"
+            deadline = "Today"
+            reason = f"Coverage {r['Days_Cover']:.1f}d < lead time {r['Lead_Time_Days']:.0f}d"
+        elif r["Action"] == "CONFIRM_PO":
+            action = f"CONFIRM OPEN PO ({r['Open_PO']:.0f} units)"
+            owner = "Planner / Buyer"
+            deadline = "This week"
+            reason = f"Existing PO should cover requirement; validate ETA"
+        elif r["Action"] == "REVIEW":
+            action = "REVIEW REPLENISHMENT POLICY"
+            owner = "Planner"
+            deadline = "Next cycle"
+            reason = "Below target but not yet a critical stockout"
+        elif r["Action"] == "DO_NOT_BUY":
+            action = "BLOCK NEW REPLENISHMENT"
+            owner = "Planner"
+            deadline = "Immediate"
+            reason = f"Coverage {r['Days_Cover']:.1f}d indicates excess"
+        else:
+            action = "MONITOR"
+            owner = "Planner"
+            deadline = "Routine"
+            reason = "Within current policy"
+        plan.append({
+            "Priority": len(plan) + 1,
+            "SKU": r["SKU"],
+            "Description": r["Description"],
+            "Supplier": r["Supplier"],
+            "Action": action,
+            "Owner": owner,
+            "Deadline": deadline,
+            "Reason": reason,
+            "Confidence": r["Decision_Confidence"],
+            "Purchase_Value": r["Purchase_Value"],
+        })
+    return pd.DataFrame(plan)
+
+def supplier_message(row, company=""):
+    return (
+        f"Subject: Urgent supply chain follow-up — {row['SKU']} / {row['Description']}\n\n"
+        f"Hello {row['Supplier']} team,\n\n"
+        f"We are reviewing replenishment for {row['SKU']} ({row['Description']}). "
+        f"The current stock coverage is {row['Days_Cover']:.1f} days and the lead time is "
+        f"{row['Lead_Time_Days']:.0f} days.\n\n"
+        f"Please confirm the current order status, expected ship date and expected delivery date. "
+        f"Where applicable, please confirm the quantity of {row['Recommended_Order']:.0f} units.\n\n"
+        f"Thank you,\n{company or 'Supply Chain Team'}"
+    )
+
 def validate(df):
     missing = [c for c in REQUIRED if c not in df.columns]
     if missing:
@@ -438,7 +559,7 @@ if "chat" not in st.session_state:
 with st.sidebar:
     st.markdown("## 📦 Supply Chain AI")
     st.caption("Decision Intelligence for planners")
-    uploaded = st.file_uploader("CSV histórico", type=["csv"])
+    uploaded = st.file_uploader("Histórico de demanda e inventario", type=["csv", "xlsx", "xls"])
     safety_days = st.slider("Safety stock floor (días)", 0, 90, 10)
     service = st.select_slider("Service level", options=[0.90,0.95,0.975,0.99], value=0.95)
     st.subheader("🤖 OpenAI")
@@ -517,12 +638,17 @@ with st.sidebar:
 # -----------------------------
 # Load data
 # -----------------------------
+if "raw_data" not in st.session_state:
+    st.session_state.raw_data = sample_data()
+
 if uploaded:
-    raw = pd.read_csv(uploaded)
+    raw = read_uploaded(uploaded)
+    raw = normalize_columns(raw)
     valid, error = validate(raw)
     if not valid:
         st.error(error)
         st.stop()
+    st.session_state.raw_data = raw
     st.session_state.analysis = analyze(raw, safety_days, service)
 elif st.session_state.analysis is None:
     st.session_state.analysis = analyze(sample_data(), safety_days, service)
@@ -541,7 +667,7 @@ a["Forecast_Change_Pct"] = np.where(
 # Header
 # -----------------------------
 st.title("📦 Supply Chain AI Copilot")
-st.caption("From raw supply-chain data to prioritized decisions · V1.3.1")
+st.caption("From raw supply-chain data to prioritized decisions · V1.4")
 
 c1,c2,c3,c4,c5,c6 = st.columns(6)
 c1.metric("SKUs", K["sku"])
@@ -553,7 +679,8 @@ c6.metric("📈 Next month", f"{K['forecast']:,.0f}")
 
 tabs = st.tabs([
     "🎯 Decision Center","📊 Inventory","📈 Forecast",
-    "🧩 ABC/XYZ","🚚 Suppliers","🧪 Scenarios","🤖 Copilot","📤 Export"
+    "🧩 ABC/XYZ","🚚 Suppliers","🧪 Scenarios","🧹 Data Quality",
+    "📝 Action Plan","🤖 Copilot","📤 Export"
 ])
 
 # -----------------------------
@@ -670,7 +797,7 @@ with tabs[5]:
     with s2:
         sim_lead = st.slider("Lead time multiplier", .5, 2.0, 1.0, .05, key="sim_lead")
 
-    sim = raw.copy() if uploaded else sample_data().copy()
+    sim = raw.copy()
     sim["Lead_Time_Days"] = pd.to_numeric(sim["Lead_Time_Days"], errors="coerce").fillna(0)*sim_lead
     sim_a = analyze(sim, sim_safety, service)
     base_val = float(a["Purchase_Value"].sum())
@@ -682,10 +809,57 @@ with tabs[5]:
     m2.metric("Critical SKUs", sim_risk, f"{sim_risk-base_risk:+d}")
     m3.metric("Required stock value", f"€{(sim_a['Required_Stock']*sim_a['Unit_Cost']).sum():,.0f}")
 
+
+# -----------------------------
+# Data Quality
+# -----------------------------
+with tabs[8]:
+    st.subheader("🧹 Data quality")
+    st.caption("The Copilot should not make decisions from bad master or transaction data.")
+    dq = data_quality_report(raw)
+    st.dataframe(dq, use_container_width=True, hide_index=True)
+
+    issues = dq[dq["Status"] != "OK"]
+    if issues.empty:
+        st.success("✅ No structural data-quality issues detected.")
+    else:
+        st.warning(f"Detected {len(issues)} data-quality warning(s). Resolve them before using recommendations operationally.")
+
+# -----------------------------
+# Action Plan
+# -----------------------------
+with tabs[9]:
+    st.subheader("📝 Weekly action plan")
+    st.caption("Operational worklist created from the Decision Engine.")
+    plan = build_action_plan(a)
+    st.dataframe(plan, use_container_width=True, hide_index=True)
+
+    selected_sku = st.selectbox(
+        "Generate supplier communication for SKU",
+        options=[""] + list(a["SKU"].astype(str))
+    )
+    if selected_sku:
+        row = a[a["SKU"].astype(str) == selected_sku].iloc[0]
+        st.code(supplier_message(row), language="text")
+
+        st.download_button(
+            "⬇️ Download supplier message",
+            supplier_message(row).encode("utf-8"),
+            f"supplier_message_{selected_sku}.txt",
+            "text/plain"
+        )
+
+    st.download_button(
+        "⬇️ Download action plan",
+        plan.to_csv(index=False).encode("utf-8"),
+        "weekly_action_plan.csv",
+        "text/csv"
+    )
+
 # -----------------------------
 # Copilot
 # -----------------------------
-with tabs[6]:
+with tabs[8]:
     st.subheader("🤖 Ask your Supply Chain Copilot")
     st.caption("Examples: “What should I buy this week?”, “Where is my biggest stockout risk?”, “Which suppliers need attention?”")
     for m in st.session_state.chat:
@@ -705,7 +879,7 @@ with tabs[6]:
 # -----------------------------
 # Export
 # -----------------------------
-with tabs[7]:
+with tabs[9]:
     st.subheader("📤 Export")
     st.download_button(
         "Download full analysis",
