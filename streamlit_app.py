@@ -2706,13 +2706,85 @@ with tabs[7]:
             use_container_width=True, hide_index=True
         )
 
-    st.download_button(
-        "⬇️ Download data-quality report",
-        dq.to_csv(index=False).encode("utf-8"),
-        "data_quality_report.csv",
-        "text/csv",
-        use_container_width=True
-    )
+    st.subheader("📤 Export Data Quality")
+    dq_html = build_data_quality_report_html(raw, dq)
+    dq1, dq2 = st.columns(2)
+    with dq1:
+        st.download_button(
+            "🌐 Data Quality Report (HTML)",
+            dq_html.encode("utf-8"),
+            "data_quality_report.html",
+            "text/html",
+            use_container_width=True,
+            key="data_quality_html_export"
+        )
+    with dq2:
+        try:
+            dq_excel = _excel_data_quality_bytes(raw, dq)
+        except Exception as dq_exc:
+            dq_excel = None
+            st.warning(f"Excel export unavailable: {dq_exc}")
+        if dq_excel:
+            st.download_button(
+                "📗 Data Quality Report (Excel)",
+                dq_excel,
+                "data_quality_report.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+                key="data_quality_excel_export"
+            )
+    st.caption("HTML provides the management-ready visual report; Excel provides editable quality checks and KPI summary.")
+
+
+def _excel_data_quality_bytes(raw, dq):
+    if xlsxwriter is None:
+        raise RuntimeError("XlsxWriter is not available. Add XlsxWriter to requirements.txt and redeploy.")
+    buf = io.BytesIO()
+    wb = xlsxwriter.Workbook(buf, {"in_memory": True})
+    title = wb.add_format({"bold": True, "font_size": 18, "font_color": "#FFFFFF", "bg_color": "#17365D", "align": "left", "valign": "vcenter"})
+    subtitle = wb.add_format({"italic": True, "font_color": "#666666"})
+    header = wb.add_format({"bold": True, "font_color": "#FFFFFF", "bg_color": "#17365D", "align": "center", "valign": "vcenter", "text_wrap": True})
+    ok_fmt = wb.add_format({"font_color": "#166534", "bg_color": "#DCFCE7"})
+    warn_fmt = wb.add_format({"font_color": "#92400E", "bg_color": "#FEF3C7"})
+    crit_fmt = wb.add_format({"font_color": "#991B1B", "bg_color": "#FEE2E2"})
+    text_fmt = wb.add_format({"valign": "top", "text_wrap": True})
+    integer_fmt = wb.add_format({"num_format": "#,##0", "valign": "top"})
+
+    summary = data_quality_summary(raw, dq)
+    ws = wb.add_worksheet("Summary")
+    ws.hide_gridlines(2)
+    ws.merge_range("A1:F1", "Supply Chain AI — Data Quality Report", title)
+    ws.write("A2", f"Latest period: {summary['latest_period']} · {summary['rows']:,} rows · {summary['skus']:,} SKUs · {summary['suppliers']:,} suppliers", subtitle)
+    kpis = [("Rows", summary["rows"]), ("SKUs", summary["skus"]), ("Suppliers", summary["suppliers"]), ("Checks", summary["checks"]), ("Warnings", summary["warnings"]), ("Critical", summary["critical"])]
+    for i, (label, value) in enumerate(kpis):
+        col = i % 3 * 2
+        row = 3 + (i // 3) * 2
+        ws.write(row, col, label, header)
+        ws.write(row + 1, col, value, integer_fmt)
+        ws.set_column(col, col, 18)
+        ws.set_column(col + 1, col + 1, 3)
+    status_text = "ALL CHECKS PASSED" if summary["critical"] == 0 and summary["warnings"] == 0 else ("CRITICAL ISSUES DETECTED" if summary["critical"] > 0 else "WARNINGS DETECTED")
+    status_fmt = crit_fmt if summary["critical"] > 0 else (warn_fmt if summary["warnings"] > 0 else ok_fmt)
+    ws.write(8, 0, status_text, status_fmt)
+    ws.merge_range(8, 0, 8, 5, status_text, status_fmt)
+    ws.set_row(8, 24)
+
+    detail = wb.add_worksheet("Quality Checks")
+    detail.hide_gridlines(2)
+    detail.write_row(0, 0, ["Category", "Check", "Status", "Count", "Details"], header)
+    for r, row in enumerate(dq[["Category","Check","Status","Count","Details"]].itertuples(index=False, name=None), 1):
+        detail.write(r, 0, row[0], text_fmt)
+        detail.write(r, 1, row[1], text_fmt)
+        fmt = crit_fmt if row[2] == "CRITICAL" else (warn_fmt if row[2] == "WARNING" else ok_fmt)
+        detail.write(r, 2, row[2], fmt)
+        detail.write(r, 3, 0 if pd.isna(row[3]) else row[3], integer_fmt)
+        detail.write(r, 4, row[4], text_fmt)
+    detail.add_table(0, 0, len(dq), 4, {"name": "DataQualityChecks", "style": "Table Style Medium 2", "columns": [{"header": c} for c in ["Category","Check","Status","Count","Details"]]})
+    detail.set_column("A:A", 18); detail.set_column("B:B", 32); detail.set_column("C:C", 14); detail.set_column("D:D", 12); detail.set_column("E:E", 60)
+    detail.freeze_panes(1, 0)
+    wb.close()
+    buf.seek(0)
+    return buf.getvalue()
 
 # -----------------------------
 # Action Plan
