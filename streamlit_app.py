@@ -201,6 +201,11 @@ def analyze(df, safety_days=10, service_level=0.95):
     a["Demand_CV"] = a["SKU"].map(cv_map).fillna(0)
     a["Forecast_Next_Month"] = a["SKU"].map(forecast_map).fillna(0)
     a["Trend_Units_Per_Month"] = a["SKU"].map(trend_map).fillna(0)
+    a["Forecast_Change_Pct"] = np.where(
+        a["Avg_Monthly_Demand"] > 0,
+        (a["Forecast_Next_Month"] / a["Avg_Monthly_Demand"] - 1) * 100,
+        0
+    )
 
     # A transparent approximation: monthly demand std -> daily uncertainty.
     a["Daily_Demand_Std"] = a["Avg_Daily_Demand"] * a["Demand_CV"]
@@ -221,6 +226,24 @@ def analyze(df, safety_days=10, service_level=0.95):
         for q, m in zip(a["Raw_Order_Qty"], a["MOQ"])
     ]
     a["Purchase_Value"] = a["Recommended_Order"] * a["Unit_Cost"]
+
+    a["Open_PO_Cover_Days"] = a.apply(
+        lambda r: r["Open_PO"] / r["Avg_Daily_Demand"] if r["Avg_Daily_Demand"] > 0 else np.inf,
+        axis=1
+    )
+    a["Projected_Stock_After_PO"] = a["Stock"] + a["Open_PO"]
+    a["Projected_Days_After_PO"] = a.apply(
+        lambda r: r["Projected_Stock_After_PO"] / r["Avg_Daily_Demand"]
+        if r["Avg_Daily_Demand"] > 0 else np.inf, axis=1
+    )
+    a["Service_Risk_Qty"] = (a["Lead_Time_Demand"] - a["Stock"]).clip(lower=0)
+    a["Service_Risk_Value"] = a["Service_Risk_Qty"] * a["Unit_Cost"]
+    a["Excess_Inventory_Qty"] = (a["Stock"] - a["Required_Stock"]).clip(lower=0)
+    a["Excess_Inventory_Value"] = a["Excess_Inventory_Qty"] * a["Unit_Cost"]
+    a["PO_Adequacy"] = np.where(
+        a["Open_PO"] >= a["Required_Stock"] - a["Stock"], "ADEQUATE",
+        np.where(a["Open_PO"] > 0, "PARTIAL", "NONE")
+    )
 
     # Action timing / urgency
     a["Days_To_Stockout"] = a["Days_Cover"]
@@ -351,6 +374,156 @@ def decision_text(a):
         lines.append("**Acción inmediata:** emitir/validar pedidos de los SKUs `BUY_NOW` y confirmar fecha de entrega con el proveedor.")
     return "\n".join(lines)
 
+def agent_purchase_tool(a):
+    x = a[(a["Action"].isin(["BUY_NOW", "CONFIRM_PO"])) | (a["Recommended_Order"] > 0)].copy()
+    x = x.sort_values("Decision_Score", ascending=False)
+    return {
+        "name": "purchase_planner",
+        "purpose": "Prioritize what should be purchased or confirmed this week.",
+        "kpis": {
+            "recommended_purchase_value": float(x["Purchase_Value"].sum()),
+            "lines": int(len(x)),
+            "critical_lines": int((x["Status"] == "🔴 CRITICAL").sum()),
+        },
+        "rows": x[[
+            "SKU","Description","Supplier","Status","Action","Action_Timing",
+            "Stock","Open_PO","Days_Cover","Lead_Time_Days","Recommended_Order",
+            "Purchase_Value","PO_Adequacy","Decision_Confidence"
+        ]].round(2).to_dict("records"),
+    }
+
+def agent_inventory_tool(a):
+    x = a[(a["Action"] == "DO_NOT_BUY") | (a["Excess_Inventory_Value"] > 0)].copy()
+    x = x.sort_values("Excess_Inventory_Value", ascending=False)
+    return {
+        "name": "inventory_optimizer",
+        "purpose": "Identify excess inventory and opportunities to stop replenishment.",
+        "kpis": {
+            "excess_inventory_value": float(x["Excess_Inventory_Value"].sum()),
+            "sku_count": int(len(x)),
+        },
+        "rows": x[[
+            "SKU","Description","Supplier","Stock","Required_Stock",
+            "Days_Cover","Excess_Inventory_Qty","Excess_Inventory_Value",
+            "Open_PO","Action"
+        ]].round(2).to_dict("records"),
+    }
+
+def agent_service_tool(a):
+    x = a[a["Service_Risk_Value"] > 0].copy()
+    x = x.sort_values(["Service_Risk_Value","Decision_Score"], ascending=False)
+    return {
+        "name": "service_risk",
+        "purpose": "Identify inventory gaps that can create service risk before replenishment arrives.",
+        "kpis": {
+            "service_risk_value": float(x["Service_Risk_Value"].sum()),
+            "sku_count": int(len(x)),
+        },
+        "rows": x[[
+            "SKU","Description","Supplier","Stock","Lead_Time_Demand",
+            "Days_Cover","Lead_Time_Days","Service_Risk_Qty","Service_Risk_Value"
+        ]].round(2).to_dict("records"),
+    }
+
+def agent_supplier_tool(a):
+    x = a.groupby("Supplier", as_index=False).agg(
+        SKUs=("SKU","count"),
+        Critical=("Status", lambda s: (s == "🔴 CRITICAL").sum()),
+        Review=("Status", lambda s: (s == "🟠 REVIEW").sum()),
+        Purchase_Value=("Purchase_Value","sum"),
+        Inventory_Value=("Inventory_Value","sum"),
+        Service_Risk_Value=("Service_Risk_Value","sum"),
+        Excess_Inventory_Value=("Excess_Inventory_Value","sum"),
+    )
+    x["Supplier_Risk_Score"] = (
+        x["Critical"] * 100 + x["Review"] * 40
+        + np.log1p(x["Service_Risk_Value"]) * 5
+        + np.log1p(x["Purchase_Value"]) * 2
+    )
+    x = x.sort_values("Supplier_Risk_Score", ascending=False)
+    return {
+        "name": "supplier_risk",
+        "purpose": "Rank suppliers by operational risk and economic exposure.",
+        "kpis": {
+            "supplier_count": int(len(x)),
+            "suppliers_with_critical": int((x["Critical"] > 0).sum()),
+        },
+        "rows": x.round(2).to_dict("records"),
+    }
+
+def agent_forecast_tool(a):
+    x = a.sort_values("Forecast_Change_Pct", ascending=False)
+    return {
+        "name": "demand_outlook",
+        "purpose": "Identify demand growth/decline that may change replenishment priorities.",
+        "rising": x.head(10)[[
+            "SKU","Description","Forecast_Next_Month","Forecast_Change_Pct",
+            "Trend_Units_Per_Month","Demand_CV","Action"
+        ]].round(2).to_dict("records"),
+        "falling": x.tail(10)[[
+            "SKU","Description","Forecast_Next_Month","Forecast_Change_Pct",
+            "Trend_Units_Per_Month","Demand_CV","Action"
+        ]].round(2).to_dict("records"),
+    }
+
+def route_agent(question, a):
+    q = question.lower()
+    tools = []
+    if any(k in q for k in ["compr","purchase","orden","po","reponer","buy"]):
+        tools.append(agent_purchase_tool(a))
+    if any(k in q for k in ["exceso","sobrestock","inventory","inventario","capital"]):
+        tools.append(agent_inventory_tool(a))
+    if any(k in q for k in ["rotura","riesgo","servicio","stockout","nivel de servicio"]):
+        tools.append(agent_service_tool(a))
+    if any(k in q for k in ["proveedor","supplier","vendor"]):
+        tools.append(agent_supplier_tool(a))
+    if any(k in q for k in ["forecast","demanda","previsión","tendencia"]):
+        tools.append(agent_forecast_tool(a))
+    if not tools or any(k in q for k in ["prioridad","prioridades","resumen","esta semana","qué debería"]):
+        tools = [
+            agent_purchase_tool(a), agent_service_tool(a), agent_inventory_tool(a),
+            agent_supplier_tool(a), agent_forecast_tool(a)
+        ]
+    seen = set()
+    out = []
+    for t in tools:
+        if t["name"] not in seen:
+            out.append(t)
+            seen.add(t["name"])
+    return out
+
+def agent_local_response(question, a):
+    tools = route_agent(question, a)
+    lines = ["## Supply Chain Agent — análisis"]
+    for tool in tools:
+        lines.append(f"### {tool['name']}")
+        if tool["name"] == "purchase_planner":
+            k = tool["kpis"]
+            lines.append(f"Compra recomendada: **€{k['recommended_purchase_value']:,.0f}** · {k['lines']} líneas · {k['critical_lines']} críticas.")
+            lines += [
+                f"- **{r['SKU']}** → {r['Action']} · {r['Recommended_Order']:.0f} uds · cover {r['Days_Cover']:.1f}d · LT {r['Lead_Time_Days']:.0f}d."
+                for r in tool["rows"][:8]
+            ]
+        elif tool["name"] == "inventory_optimizer":
+            k = tool["kpis"]
+            lines.append(f"Exceso estimado: **€{k['excess_inventory_value']:,.0f}** en {k['sku_count']} SKUs.")
+        elif tool["name"] == "service_risk":
+            k = tool["kpis"]
+            lines.append(f"Exposición de servicio: **€{k['service_risk_value']:,.0f}** en {k['sku_count']} SKUs.")
+        elif tool["name"] == "supplier_risk":
+            lines += [
+                f"- **{r['Supplier']}** → críticos {int(r['Critical'])}, compras €{r['Purchase_Value']:,.0f}, riesgo servicio €{r['Service_Risk_Value']:,.0f}."
+                for r in tool["rows"][:8]
+            ]
+        elif tool["name"] == "demand_outlook":
+            lines.append("Mayores subidas de demanda:")
+            lines += [
+                f"- **{r['SKU']}** → forecast {r['Forecast_Next_Month']:.0f} uds ({r['Forecast_Change_Pct']:+.1f}%)."
+                for r in tool["rising"][:5]
+            ]
+    return "\n".join(lines)
+
+
 def build_context(a):
     cols = [
         "SKU","Description","Supplier","Status","Stock","Open_PO",
@@ -424,125 +597,42 @@ def test_openai_connection(api_key, model):
         }
 
 def ai_chat(question, a, api_key=None, model="gpt-5.6-luna"):
-    q = question.lower()
+    tool_results = route_agent(question, a)
 
-    def local_mode():
-        if any(w in q for w in ["compr", "buy", "orden", "purchase"]):
-            return decision_text(a)
-
-        if any(w in q for w in ["rotura", "riesgo", "stockout", "critical"]):
-            x = a[a["Status"] == "🔴 CRITICAL"]
-            if x.empty:
-                return "No se detectan riesgos críticos con los parámetros actuales."
-
-            return "### Riesgos críticos\n" + "\n".join(
-                f"- **{r.SKU}**: {r.Days_Cover:.1f} días de cobertura frente a "
-                f"{r.Lead_Time_Days:.0f} días de lead time."
-                for _, r in x.sort_values("Decision_Score", ascending=False).iterrows()
-            )
-
-        if any(w in q for w in ["exceso", "sobrestock", "excess"]):
-            x = a[a["Status"] == "🟡 EXCESS"]
-            if x.empty:
-                return "No se detectan excesos."
-
-            return "### Exceso de cobertura\n" + "\n".join(
-                f"- **{r.SKU}**: {r.Days_Cover:.1f} días de cobertura."
-                for _, r in x.iterrows()
-            )
-
-        if "forecast" in q or "previsión" in q:
-            x = a.sort_values("Forecast_Next_Month", ascending=False).head(10)
-            return "### Forecast próximo mes\n" + "\n".join(
-                f"- **{r.SKU}**: {r.Forecast_Next_Month:.0f} uds. "
-                f"({r.Forecast_Change_Pct:+.1f}% vs media)."
-                for _, r in x.iterrows()
-            )
-
-        if "proveedor" in q or "supplier" in q:
-            x = a.groupby("Supplier", as_index=False).agg(
-                Critical=("Status", lambda s: (s == "🔴 CRITICAL").sum()),
-                Inventory_Value=("Inventory_Value", "sum"),
-                Purchase_Value=("Purchase_Value", "sum")
-            ).sort_values(["Critical", "Inventory_Value"], ascending=[False, False])
-
-            return "### Proveedores a vigilar\n" + "\n".join(
-                f"- **{r.Supplier}**: {int(r.Critical)} SKUs críticos; "
-                f"inventario €{r.Inventory_Value:,.0f}; compras €{r.Purchase_Value:,.0f}."
-                for _, r in x.head(10).iterrows()
-            )
-
-        return (
-            "Puedo ayudarte con compras, riesgos de rotura, exceso, "
-            "forecast y proveedores."
-        )
-
-    if not api_key:
-        return local_mode()
-
-    if OpenAI is None:
-        return "OpenAI no está instalado. Usa el modo local."
+    if not api_key or OpenAI is None:
+        return agent_local_response(question, a)
 
     try:
         client = _make_openai_client(api_key)
-
         context = build_context(a)
-
         response = client.responses.create(
             model=model,
             instructions=(
-                "Eres un Supply Chain Decision Copilot senior. Responde en español, "
-                "de forma ejecutiva y accionable. Usa exclusivamente los datos proporcionados. "
-                "No inventes números ni proveedores, y no conviertas una inferencia en un hecho. "
-                "Para preguntas de compra, estructura la respuesta en: 1) resumen ejecutivo, "
-                "2) tres prioridades, 3) plan de compra/acción, 4) riesgos y supuestos. "
-                "Usa Action, Action_Timing y Decision_Confidence cuando existan. "
-                "Si un SKU tiene PO abierta, prioriza confirmar la PO antes de recomendar otra compra. "
-                "Si está en DO_NOT_BUY, explica el exceso y evita recomendar compra. "
-                "No ejecutes compras: prepara recomendaciones para validación humana."
+                "Eres un agente senior de Supply Chain. Responde en español y de forma operativa. "
+                "Usa los resultados estructurados de las herramientas. No inventes números. "
+                "No ejecutes compras. Para compras distingue BUY_NOW de CONFIRM_PO. "
+                "Si existe PO abierta, confirma su adecuación antes de recomendar una nueva compra. "
+                "Para exceso cuantifica el valor de inventario potencialmente liberable. "
+                "Para servicio cuantifica unidades y valor expuesto. "
+                "Para proveedores explica concentración de riesgo. "
+                "Para forecast señala cambios que puedan modificar decisiones. "
+                "En preguntas ejecutivas: Resumen → Top 3 prioridades → Acciones → Riesgos/Supuestos."
             ),
-            input=f"PREGUNTA:\n{question}\n\nDATOS CALCULADOS:\n{context}",
+            input=f"PREGUNTA:\\n{question}\\n\\nHERRAMIENTAS:\\n{tool_results}\\n\\nDATASET:\\n{context}"
         )
-
         return response.output_text
-
     except AuthenticationError as exc:
         status, code, error_type = _openai_error_info(exc)
-        return (
-            "### ⚠️ OpenAI ha rechazado la autenticación\n\n"
-            f"HTTP: `{status or 'desconocido'}` · "
-            f"code: `{code or 'desconocido'}` · "
-            f"type: `{error_type or 'desconocido'}`\n\n"
-            "Revisa la API key y el proyecto configurados en Streamlit Secrets."
-        )
-
+        return f"### ⚠️ Autenticación OpenAI fallida\\nHTTP `{status or 'desconocido'}` · code `{code or 'desconocido'}` · type `{error_type or 'desconocido'}`"
     except RateLimitError as exc:
         status, code, error_type = _openai_error_info(exc)
-        return (
-            "### ⚠️ Límite o cuota de OpenAI\n\n"
-            f"HTTP: `{status or 'desconocido'}` · "
-            f"code: `{code or 'desconocido'}` · "
-            f"type: `{error_type or 'desconocido'}`"
-        )
-
+        return f"### ⚠️ Cuota/límite OpenAI\\nHTTP `{status or 'desconocido'}` · code `{code or 'desconocido'}` · type `{error_type or 'desconocido'}`"
     except APIError as exc:
         status, code, error_type = _openai_error_info(exc)
-        return (
-            "### ⚠️ Error de API OpenAI\n\n"
-            f"HTTP: `{status or 'desconocido'}` · "
-            f"code: `{code or 'desconocido'}` · "
-            f"type: `{error_type or 'desconocido'}`"
-        )
-
+        return f"### ⚠️ Error OpenAI\\nHTTP `{status or 'desconocido'}` · code `{code or 'desconocido'}` · type `{error_type or 'desconocido'}`"
     except Exception as exc:
-        status, code, error_type = _openai_error_info(exc)
-        return (
-            "### ⚠️ Error al consultar OpenAI\n\n"
-            f"`{type(exc).__name__}` · "
-            f"HTTP `{status or 'desconocido'}` · "
-            f"code `{code or 'desconocido'}` · "
-            f"type `{error_type or 'desconocido'}`"
-        )
+        return f"### ⚠️ Error del agente\\n`{type(exc).__name__}: {str(exc)}`"
+
 
 def export_purchase(a):
     x = a[a["Recommended_Order"] > 0].copy()
@@ -675,7 +765,7 @@ a["Forecast_Change_Pct"] = np.where(
 # Header
 # -----------------------------
 st.title("📦 Supply Chain AI Copilot")
-st.caption("From raw supply-chain data to prioritized decisions · V1.4.1")
+st.caption("From raw supply-chain data to prioritized decisions · V1.5 Agent")
 
 c1,c2,c3,c4,c5,c6 = st.columns(6)
 c1.metric("SKUs", K["sku"])
@@ -722,6 +812,15 @@ with tabs[0]:
         "REVIEW/CONFIRM_PO cases are handled separately to avoid double ordering when an open PO already exists. "
         "DO_NOT_BUY cases are flagged when coverage is materially above the policy threshold."
     )
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Service risk", f"€{a['Service_Risk_Value'].sum():,.0f}")
+    c2.metric("Excess exposure", f"€{a['Excess_Inventory_Value'].sum():,.0f}")
+    po_cover = a["Open_PO_Cover_Days"].replace([np.inf, -np.inf], np.nan)
+    c3.metric("Median PO cover", f"{po_cover.median():.1f}d" if po_cover.notna().any() else "—")
+    supplier_tool = agent_supplier_tool(a)
+    top_supplier = supplier_tool["rows"][0]["Supplier"] if supplier_tool["rows"] else "—"
+    c4.metric("Top supplier risk", str(top_supplier))
 
     st.subheader("Purchase plan by supplier")
     po = export_purchase(a)
@@ -875,6 +974,27 @@ with tabs[9]:
 # Copilot
 # -----------------------------
 with tabs[8]:
+    st.subheader("⚡ Quick analyses")
+    q1, q2, q3, q4 = st.columns(4)
+    quick_question = None
+    if q1.button("🛒 Purchase priorities"):
+        quick_question = "¿Qué debería comprar esta semana y cuáles son las 3 prioridades más importantes?"
+    if q2.button("💰 Reduce inventory"):
+        quick_question = "¿Dónde puedo reducir inventario sin aumentar demasiado el riesgo de servicio?"
+    if q3.button("🚚 Supplier risk"):
+        quick_question = "¿Qué proveedores requieren más atención y por qué?"
+    if q4.button("📈 Demand outlook"):
+        quick_question = "¿Qué cambios de demanda pueden cambiar mis decisiones de compra?"
+    if quick_question:
+        st.session_state.chat.append({"role": "user", "content": quick_question})
+        with st.chat_message("user"):
+            st.markdown(quick_question)
+        with st.chat_message("assistant"):
+            with st.spinner("Ejecutando análisis de Supply Chain..."):
+                ans = ai_chat(quick_question, a, effective_key, model)
+            st.markdown(ans)
+        st.session_state.chat.append({"role": "assistant", "content": ans})
+
     st.subheader("🤖 Ask your Supply Chain Copilot")
     st.caption("Examples: “What should I buy this week?”, “Where is my biggest stockout risk?”, “Which suppliers need attention?”")
     for m in st.session_state.chat:
