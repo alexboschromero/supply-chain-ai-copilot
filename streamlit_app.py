@@ -752,9 +752,26 @@ if st.session_state.analysis is None:
 
 raw = st.session_state.raw_data
 a = st.session_state.analysis
+
+# Schema guard: Streamlit can keep session_state across code updates.
+# If the analysis was calculated by an older version, rebuild it so newly
+# introduced decision columns are present.
+_REQUIRED_ANALYSIS_COLUMNS = {
+    "Service_Risk_Value",
+    "Excess_Inventory_Value",
+    "Open_PO_Cover_Days",
+    "PO_Adequacy",
+    "Action",
+    "Decision_Confidence",
+    "Forecast_Change_Pct",
+}
+if not _REQUIRED_ANALYSIS_COLUMNS.issubset(set(a.columns)):
+    a = analyze(raw, safety_days, service)
+    st.session_state.analysis = a
+
 K = kpis(a)
 
-# Add forecast change vs historical monthly average
+# Add/refresh forecast change vs historical monthly average
 a["Forecast_Change_Pct"] = np.where(
     a["Avg_Monthly_Demand"] > 0,
     (a["Forecast_Next_Month"]/a["Avg_Monthly_Demand"]-1)*100,
@@ -765,7 +782,7 @@ a["Forecast_Change_Pct"] = np.where(
 # Header
 # -----------------------------
 st.title("📦 Supply Chain AI Copilot")
-st.caption("From raw supply-chain data to prioritized decisions · V1.5 Agent")
+st.caption("From raw supply-chain data to prioritized decisions · V1.5.1")
 
 c1,c2,c3,c4,c5,c6 = st.columns(6)
 c1.metric("SKUs", K["sku"])
@@ -814,9 +831,11 @@ with tabs[0]:
     )
 
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Service risk", f"€{a['Service_Risk_Value'].sum():,.0f}")
-    c2.metric("Excess exposure", f"€{a['Excess_Inventory_Value'].sum():,.0f}")
-    po_cover = a["Open_PO_Cover_Days"].replace([np.inf, -np.inf], np.nan)
+    service_risk_value = float(a.get("Service_Risk_Value", pd.Series(0, index=a.index)).sum())
+    excess_value = float(a.get("Excess_Inventory_Value", pd.Series(0, index=a.index)).sum())
+    c1.metric("Service risk", f"€{service_risk_value:,.0f}")
+    c2.metric("Excess exposure", f"€{excess_value:,.0f}")
+    po_cover = a.get("Open_PO_Cover_Days", pd.Series(np.nan, index=a.index)).replace([np.inf, -np.inf], np.nan)
     c3.metric("Median PO cover", f"{po_cover.median():.1f}d" if po_cover.notna().any() else "—")
     supplier_tool = agent_supplier_tool(a)
     top_supplier = supplier_tool["rows"][0]["Supplier"] if supplier_tool["rows"] else "—"
