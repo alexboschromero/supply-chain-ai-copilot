@@ -3163,6 +3163,18 @@ _original_st_dataframe = st.dataframe
 # counter for the rare case where the same dataframe call is executed in a loop.
 _scai_filter_occurrences = {}
 
+# Persistent widget-key registry. Streamlit reruns the script from top to bottom,
+# so module-level counters are reset on every interaction. A session-level registry
+# gives each table/filter widget a stable and genuinely unique key across reruns.
+def _scai_stable_filter_id(callsite, occurrence):
+    registry = st.session_state.setdefault("_scai_filter_key_registry", {})
+    registry_key = f"{callsite}::{occurrence}"
+    if registry_key not in registry:
+        registry[registry_key] = hashlib.sha1(
+            f"{registry_key}::{len(registry)}".encode("utf-8")
+        ).hexdigest()[:20]
+    return registry[registry_key]
+
 
 def _filterable_dataframe(data, *args, **kwargs):
     if not isinstance(data, pd.DataFrame):
@@ -3174,8 +3186,7 @@ def _filterable_dataframe(data, *args, **kwargs):
     callsite = f"{caller_file}:{caller_line}"
     occurrence = _scai_filter_occurrences.get(callsite, 0) + 1
     _scai_filter_occurrences[callsite] = occurrence
-    digest = hashlib.sha1(callsite.encode("utf-8")).hexdigest()[:12]
-    table_id = f"{digest}_{occurrence}"
+    table_id = _scai_stable_filter_id(callsite, occurrence)
     df_original = data.copy()
     df = df_original.copy()
 
