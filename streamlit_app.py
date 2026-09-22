@@ -138,10 +138,6 @@ def analyze(df, safety_days=10, service_level=0.95):
             return "MEDIUM"
         return "LOW"
 
-    a["Action"] = a.apply(action, axis=1)
-    a["Action_Timing"] = a.apply(timing, axis=1)
-    a["Decision_Confidence"] = a.apply(confidence, axis=1)
-
     def status(r):
         if r["Stock"] < r["Lead_Time_Demand"]:
             return "🔴 CRITICAL"
@@ -150,7 +146,12 @@ def analyze(df, safety_days=10, service_level=0.95):
         if r["Days_Cover"] > r["Lead_Time_Days"] + safety_days*3:
             return "🟡 EXCESS"
         return "🟢 OK"
+
+    # Status must exist before Action() because Action() uses Status.
     a["Status"] = a.apply(status, axis=1)
+    a["Action"] = a.apply(action, axis=1)
+    a["Action_Timing"] = a.apply(timing, axis=1)
+    a["Decision_Confidence"] = a.apply(confidence, axis=1)
 
     # ABC
     a["Annual_Consumption_Value"] = a["Annual_Sales"] * a["Unit_Cost"]
@@ -540,7 +541,7 @@ a["Forecast_Change_Pct"] = np.where(
 # Header
 # -----------------------------
 st.title("📦 Supply Chain AI Copilot")
-st.caption("From raw supply-chain data to prioritized decisions.")
+st.caption("From raw supply-chain data to prioritized decisions · V1.3.1")
 
 c1,c2,c3,c4,c5,c6 = st.columns(6)
 c1.metric("SKUs", K["sku"])
