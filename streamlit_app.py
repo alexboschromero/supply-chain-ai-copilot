@@ -665,7 +665,7 @@ td{{padding:10px;border-bottom:1px solid var(--line);vertical-align:top}}
 <div class="header">
 <h1>{html_lib.escape(title)}</h1>
 <p>{html_lib.escape(subtitle)}</p>
-<div class="meta">Generated {generated} · Supply Chain AI Copilot V2.0.4</div>
+<div class="meta">Generated {generated} · Supply Chain AI Copilot V2.0.5</div>
 </div>
 {body}
 <div class="footer">Decision support only. Validate purchase execution and supplier commitments before release.</div>
@@ -1796,6 +1796,136 @@ def analyze(df, safety_days=10, service_level=0.95):
     a["Data_Quality"] = np.where(a["Annual_Sales"] <= 0, "⚠️ No demand", "OK")
     return a
 
+def build_logistics_dashboard(a, raw):
+    """Build the KPI layer used by the Logistics Dashboard and its exports."""
+    x = a.copy()
+    r = raw.copy()
+
+    for c in ["Sales", "Stock", "Open_PO", "Lead_Time_Days", "Unit_Cost"]:
+        if c in r.columns:
+            r[c] = pd.to_numeric(r[c], errors="coerce").fillna(0)
+
+    # Use a true trailing-12-month sales base when the source contains more than 12 months.
+    # Inventory turns are calculated against average monthly inventory value over the same period.
+    annual_sales_value = float((x["Annual_Sales"] * x["Unit_Cost"]).sum())
+    avg_inventory_value_12m = inventory_value = float(x["Inventory_Value"].sum())
+    if all(c in r.columns for c in ["Year", "Month"]):
+        r["_PeriodKey"] = pd.to_numeric(r["Year"], errors="coerce").fillna(0).astype(int) * 100 + pd.to_numeric(r["Month"], errors="coerce").fillna(0).astype(int)
+        periods = sorted(r["_PeriodKey"].unique())
+        recent_periods = periods[-12:]
+        recent = r[r["_PeriodKey"].isin(recent_periods)].copy()
+        if not recent.empty:
+            recent["_SalesValue"] = recent["Sales"] * recent["Unit_Cost"]
+            recent["_InventoryValue"] = recent["Stock"] * recent["Unit_Cost"]
+            annual_sales_value = float(recent["_SalesValue"].sum())
+            monthly_inventory = recent.groupby("_PeriodKey")["_InventoryValue"].sum()
+            avg_inventory_value_12m = float(monthly_inventory.mean()) if not monthly_inventory.empty else inventory_value
+    inventory_value = float(x["Inventory_Value"].sum())
+    open_po_value = float((x["Open_PO"] * x["Unit_Cost"]).sum())
+    purchase_value = float(x["Purchase_Value"].sum())
+    excess_value = float(x["Excess_Inventory_Value"].sum())
+    service_risk_value = float(x["Service_Risk_Value"].sum())
+
+    total_avg_daily_demand = float(x["Avg_Daily_Demand"].sum())
+    aggregate_cover = float(x["Stock"].sum() / total_avg_daily_demand) if total_avg_daily_demand > 0 else np.nan
+    inventory_turns = annual_sales_value / avg_inventory_value_12m if avg_inventory_value_12m > 0 else np.nan
+    lead_time_coverage_pct = float((x["Stock"] >= x["Lead_Time_Demand"]).mean() * 100) if len(x) else 0
+    critical_pct = float((x["Status"] == "🔴 CRITICAL").mean() * 100) if len(x) else 0
+    excess_pct = float(excess_value / inventory_value * 100) if inventory_value > 0 else 0
+    service_risk_pct = float(service_risk_value / inventory_value * 100) if inventory_value > 0 else 0
+    purchase_to_inventory_pct = float(purchase_value / inventory_value * 100) if inventory_value > 0 else 0
+    avg_lead_time = float(x["Lead_Time_Days"].mean()) if len(x) else 0
+    weighted_lead_time = float(np.average(x["Lead_Time_Days"], weights=np.maximum(x["Annual_Sales"], 0))) if x["Annual_Sales"].sum() > 0 else avg_lead_time
+
+    latest_period = "—"
+    if all(c in r.columns for c in ["Year", "Month"]) and len(r):
+        rp = r[["Year", "Month"]].copy()
+        rp["Year"] = pd.to_numeric(rp["Year"], errors="coerce")
+        rp["Month"] = pd.to_numeric(rp["Month"], errors="coerce")
+        rp = rp.dropna()
+        if not rp.empty:
+            latest_period = f"{int(rp['Year'].max())}-{int(rp.loc[rp['Year'].eq(rp['Year'].max()), 'Month'].max()):02d}"
+
+    kpi_rows = pd.DataFrame([
+        ["Inventory Value", inventory_value, "€", "Capital currently held in inventory"],
+        ["Inventory Turns", inventory_turns, "x", "Trailing-12-month sales value / average inventory value"],
+        ["Aggregate Days of Cover", aggregate_cover, "days", "Current stock / aggregate average daily demand"],
+        ["Lead-time Coverage", lead_time_coverage_pct, "%", "% of SKUs with stock covering lead-time demand"],
+        ["Critical SKU Rate", critical_pct, "%", "% of SKUs below lead-time demand"],
+        ["Excess Inventory", excess_value, "€", "Inventory above calculated required stock"],
+        ["Excess Inventory Rate", excess_pct, "%", "Excess inventory value / inventory value"],
+        ["Service Risk Exposure", service_risk_value, "€", "Value exposed before replenishment arrives"],
+        ["Open PO Value", open_po_value, "€", "Value of currently open purchase orders"],
+        ["Purchase Requirement", purchase_value, "€", "Recommended replenishment value"],
+        ["Purchase / Inventory", purchase_to_inventory_pct, "%", "Purchase requirement relative to inventory"],
+        ["Average Lead Time", avg_lead_time, "days", "Average supplier lead time"],
+        ["Weighted Lead Time", weighted_lead_time, "days", "Lead time weighted by annual demand"],
+        ["Next Month Forecast", float(x["Forecast_Next_Month"].sum()), "units", "Aggregate next-month demand forecast"],
+        ["Suppliers", int(x["Supplier"].nunique()), "", "Distinct suppliers in current analysis"],
+        ["Latest Period", latest_period, "", "Latest period detected in source data"],
+    ], columns=["KPI", "Value", "Unit", "Definition"])
+
+    trend = pd.DataFrame()
+    if all(c in r.columns for c in ["Year", "Month", "Sales", "Stock", "Open_PO", "Unit_Cost"]):
+        r["Period"] = pd.to_numeric(r["Year"], errors="coerce").fillna(0).astype(int).astype(str) + "-" + pd.to_numeric(r["Month"], errors="coerce").fillna(0).astype(int).astype(str).str.zfill(2)
+        # Value metrics must be calculated row-wise before aggregation.
+        r["Sales_Value"] = r["Sales"] * r["Unit_Cost"]
+        r["Inventory_Value_Row"] = r["Stock"] * r["Unit_Cost"]
+        r["Open_PO_Value"] = r["Open_PO"] * r["Unit_Cost"]
+        value_trend = r.groupby(["Year", "Month", "Period"], as_index=False).agg(
+            Sales_Units=("Sales", "sum"),
+            Sales_Value=("Sales_Value", "sum"),
+            Inventory_Value=("Inventory_Value_Row", "sum"),
+            Open_PO_Value=("Open_PO_Value", "sum"),
+            Open_PO_Units=("Open_PO", "sum"),
+            Avg_Lead_Time=("Lead_Time_Days", "mean"),
+        )
+        trend = value_trend.sort_values(["Year", "Month"]).tail(12).reset_index(drop=True)
+
+    supplier = x.groupby("Supplier", as_index=False).agg(
+        SKUs=("SKU", "count"),
+        Inventory_Value=("Inventory_Value", "sum"),
+        Open_PO_Value=("Open_PO", lambda s: float((s * x.loc[s.index, "Unit_Cost"]).sum())),
+        Purchase_Value=("Purchase_Value", "sum"),
+        Service_Risk_Value=("Service_Risk_Value", "sum"),
+        Excess_Inventory_Value=("Excess_Inventory_Value", "sum"),
+        Critical=("Status", lambda s: int((s == "🔴 CRITICAL").sum())),
+        Avg_Cover=("Days_Cover", lambda s: float(pd.to_numeric(s, errors="coerce").replace([np.inf, -np.inf], np.nan).mean())),
+    ).sort_values(["Service_Risk_Value", "Inventory_Value"], ascending=[False, False]).reset_index(drop=True)
+
+    abc_xyz = pd.crosstab(x["ABC"], x["XYZ"]).reindex(index=["A", "B", "C"], columns=["X", "Y", "Z"], fill_value=0)
+    lead_bins = pd.cut(
+        x["Lead_Time_Days"],
+        bins=[-np.inf, 7, 14, 30, np.inf],
+        labels=["≤7d", "8–14d", "15–30d", ">30d"]
+    ).value_counts().reindex(["≤7d", "8–14d", "15–30d", ">30d"], fill_value=0).rename_axis("Lead_Time_Bucket").reset_index(name="SKUs")
+
+    status = x["Status"].value_counts().rename_axis("Status").reset_index(name="SKUs")
+    return {
+        "kpis": kpi_rows,
+        "trend": trend,
+        "supplier": supplier,
+        "abc_xyz": abc_xyz.reset_index().rename(columns={"ABC": "ABC_Class"}),
+        "lead_bins": lead_bins,
+        "status": status,
+        "meta": {
+            "inventory_value": inventory_value,
+            "inventory_turns": inventory_turns,
+            "aggregate_cover": aggregate_cover,
+            "lead_time_coverage_pct": lead_time_coverage_pct,
+            "critical_pct": critical_pct,
+            "excess_value": excess_value,
+            "excess_pct": excess_pct,
+            "service_risk_value": service_risk_value,
+            "open_po_value": open_po_value,
+            "purchase_value": purchase_value,
+            "purchase_to_inventory_pct": purchase_to_inventory_pct,
+            "avg_lead_time": avg_lead_time,
+            "weighted_lead_time": weighted_lead_time,
+            "latest_period": latest_period,
+        },
+    }
+
 def kpis(a):
     return {
         "sku": len(a),
@@ -1943,9 +2073,53 @@ def agent_forecast_tool(a):
         ]].round(2).to_dict("records"),
     }
 
-def route_agent(question, a, comparison=None, comparison_meta=None):
+def agent_logistics_kpi_tool(a, raw=None):
+    """Expose the main logistics KPIs to the Copilot without requiring the LLM."""
+    inventory_value = float(a["Inventory_Value"].sum())
+    sales_value = float((a["Annual_Sales"] * a["Unit_Cost"]).sum())
+    avg_inventory_value = inventory_value
+    if raw is not None and all(c in raw.columns for c in ["Year", "Month", "Sales", "Stock", "Unit_Cost"]):
+        rr = raw.copy()
+        rr["_PeriodKey"] = pd.to_numeric(rr["Year"], errors="coerce").fillna(0).astype(int) * 100 + pd.to_numeric(rr["Month"], errors="coerce").fillna(0).astype(int)
+        recent_periods = sorted(rr["_PeriodKey"].unique())[-12:]
+        rr = rr[rr["_PeriodKey"].isin(recent_periods)].copy()
+        rr["_SalesValue"] = pd.to_numeric(rr["Sales"], errors="coerce").fillna(0) * pd.to_numeric(rr["Unit_Cost"], errors="coerce").fillna(0)
+        rr["_InventoryValue"] = pd.to_numeric(rr["Stock"], errors="coerce").fillna(0) * pd.to_numeric(rr["Unit_Cost"], errors="coerce").fillna(0)
+        sales_value = float(rr["_SalesValue"].sum())
+        monthly_inventory = rr.groupby("_PeriodKey")["_InventoryValue"].sum()
+        if not monthly_inventory.empty:
+            avg_inventory_value = float(monthly_inventory.mean())
+    avg_daily_demand = float(a["Avg_Daily_Demand"].sum())
+    aggregate_cover = float(a["Stock"].sum() / avg_daily_demand) if avg_daily_demand > 0 else np.nan
+    inventory_turns = sales_value / avg_inventory_value if avg_inventory_value > 0 else np.nan
+    lead_coverage = float((a["Stock"] >= a["Lead_Time_Demand"]).mean() * 100) if len(a) else 0
+    return {
+        "name": "logistics_kpis",
+        "purpose": "Summarize the main logistics and inventory KPIs for the current planning period.",
+        "kpis": {
+            "inventory_value": inventory_value,
+            "inventory_turns": inventory_turns,
+            "days_cover": aggregate_cover,
+            "lead_time_coverage_pct": lead_coverage,
+            "critical_skus": int((a["Status"] == "🔴 CRITICAL").sum()),
+            "critical_pct": float((a["Status"] == "🔴 CRITICAL").mean() * 100) if len(a) else 0,
+            "service_risk_value": float(a["Service_Risk_Value"].sum()),
+            "excess_inventory_value": float(a["Excess_Inventory_Value"].sum()),
+            "open_po_value": float((a["Open_PO"] * a["Unit_Cost"]).sum()),
+            "purchase_requirement": float(a["Purchase_Value"].sum()),
+            "supplier_count": int(a["Supplier"].nunique()),
+            "avg_lead_time": float(a["Lead_Time_Days"].mean()) if len(a) else 0,
+        },
+    }
+
+def route_agent(question, a, comparison=None, comparison_meta=None, raw=None):
     q = question.lower()
     tools = []
+    if any(k in q for k in [
+        "kpi", "kpis", "indicador", "indicadores", "dashboard", "logística", "logistica",
+        "rotación", "rotacion", "days of cover", "cobertura", "lead time coverage"
+    ]):
+        tools.append(agent_logistics_kpi_tool(a, raw))
     if any(k in q for k in [
         "qué hago","que hago","qué debería hacer","que deberia hacer",
         "siguiente","next step","plan de acción","plan de accion",
@@ -1977,12 +2151,22 @@ def route_agent(question, a, comparison=None, comparison_meta=None):
             seen.add(t["name"])
     return out
 
-def agent_local_response(question, a, comparison=None, comparison_meta=None):
-    tools = route_agent(question, a, comparison, comparison_meta)
+def agent_local_response(question, a, comparison=None, comparison_meta=None, raw=None):
+    tools = route_agent(question, a, comparison, comparison_meta, raw)
     lines = ["## Supply Chain Agent — análisis"]
     for tool in tools:
         lines.append(f"### {tool['name']}")
-        if tool["name"] == "purchase_planner":
+        if tool["name"] == "logistics_kpis":
+            k = tool["kpis"]
+            lines.append(
+                f"Inventario **€{k['inventory_value']:,.0f}** · rotación **{k['inventory_turns']:.2f}x** · "
+                f"cobertura agregada **{k['days_cover']:.1f} días** · cobertura de lead time **{k['lead_time_coverage_pct']:.1f}%**."
+            )
+            lines.append(
+                f"Riesgo de servicio **€{k['service_risk_value']:,.0f}** · exceso **€{k['excess_inventory_value']:,.0f}** · "
+                f"PO abiertas **€{k['open_po_value']:,.0f}** · compra recomendada **€{k['purchase_requirement']:,.0f}**."
+            )
+        elif tool["name"] == "purchase_planner":
             k = tool["kpis"]
             lines.append(f"Compra recomendada: **€{k['recommended_purchase_value']:,.0f}** · {k['lines']} líneas · {k['critical_lines']} críticas.")
             lines += [
@@ -2108,11 +2292,11 @@ def test_openai_connection(api_key, model):
             "exception": type(exc).__name__,
         }
 
-def ai_chat(question, a, api_key=None, model="gpt-5.6-luna", comparison=None, comparison_meta=None):
-    tool_results = route_agent(question, a, comparison, comparison_meta)
+def ai_chat(question, a, api_key=None, model="gpt-5.6-luna", comparison=None, comparison_meta=None, raw=None):
+    tool_results = route_agent(question, a, comparison, comparison_meta, raw)
 
     if not api_key or OpenAI is None:
-        return agent_local_response(question, a)
+        return agent_local_response(question, a, comparison, comparison_meta, raw)
 
     try:
         client = _make_openai_client(api_key)
@@ -2127,7 +2311,9 @@ def ai_chat(question, a, api_key=None, model="gpt-5.6-luna", comparison=None, co
                 "Para exceso cuantifica el valor de inventario potencialmente liberable. "
                 "Para servicio cuantifica unidades y valor expuesto. "
                 "Para proveedores explica concentración de riesgo. "
-                "Para forecast señala cambios que puedan modificar decisiones. ""Para comparación explica qué ha mejorado, empeorado o cambiado de acción entre periodos y cuantifica los deltas. "
+                "Para forecast señala cambios que puedan modificar decisiones. "
+                "Para KPIs logísticos usa la herramienta logistics_kpis y distingue claramente cobertura de lead time de OTIF/fill rate. "
+                "Para comparación explica qué ha mejorado, empeorado o cambiado de acción entre periodos y cuantifica los deltas. "
                 "En preguntas ejecutivas: Resumen → Top 3 prioridades → Acciones → Riesgos/Supuestos."
             ),
             input=f"PREGUNTA:\\n{question}\\n\\nHERRAMIENTAS:\\n{tool_results}\\n\\nDATASET:\\n{context}"
@@ -2264,7 +2450,7 @@ def _excel_tab_export_bytes(title, sheets, kpis=None):
         summary = wb.add_worksheet("Summary")
         summary.hide_gridlines(2)
         summary.write(0, 0, title, title_fmt)
-        summary.write(1, 0, "Exported from Supply Chain AI Copilot V2.0.4", subtitle_fmt)
+        summary.write(1, 0, "Exported from Supply Chain AI Copilot V2.0.5", subtitle_fmt)
         if kpis:
             summary.write(3, 0, "Key metrics", header_fmt)
             for i, (label, value) in enumerate(kpis.items(), start=4):
@@ -2342,6 +2528,7 @@ if not _REQUIRED_ANALYSIS_COLUMNS.issubset(set(a.columns)):
     st.session_state.analysis = a
 
 K = kpis(a)
+logistics_dashboard = build_logistics_dashboard(a, raw)
 dq = data_quality_report(raw)
 plan = build_action_plan(a)
 planning, planning_meta = build_planning_agent(a)
@@ -2403,7 +2590,7 @@ a["Forecast_Change_Pct"] = np.where(
 # Header
 # -----------------------------
 st.title("📦 Supply Chain AI Copilot")
-st.caption("From raw supply-chain data to prioritized decisions · V2.0.4")
+st.caption("From raw supply-chain data to prioritized decisions · V2.0.5")
 
 c1,c2,c3,c4,c5,c6 = st.columns(6)
 c1.metric("SKUs", K["sku"])
@@ -2414,7 +2601,7 @@ c5.metric("💰 Inventory", f"€{K['inventory']:,.0f}")
 c6.metric("📈 Next month", f"{K['forecast']:,.0f}")
 
 tabs = st.tabs([
-    "🎯 Decision Center","🧠 Planning Agent","📊 Inventory","📈 Forecast",
+    "🎯 Decision Center","📊 Logistics Dashboard","🧠 Planning Agent","📊 Inventory","📈 Forecast",
     "🧩 ABC/XYZ","🚚 Suppliers","🧪 Scenarios","🧹 Data Quality",
     "📝 Action Plan","🔄 Change Monitor","🤖 Copilot","📤 Export"
 ])
@@ -2495,9 +2682,128 @@ with tabs[0]:
         )
 
 # -----------------------------
-# Planning Agent
+# Logistics Dashboard
 # -----------------------------
 with tabs[1]:
+    st.subheader("📊 Logistics KPI Dashboard")
+    st.caption("Executive view of inventory, service exposure, replenishment, supplier exposure and logistics efficiency.")
+    d = logistics_dashboard
+    m = d["meta"]
+
+    # Executive KPI cards
+    r1 = st.columns(4)
+    r1[0].metric("💰 Inventory value", f"€{m['inventory_value']:,.0f}")
+    r1[1].metric("🔄 Inventory turns", f"{m['inventory_turns']:.2f}x" if np.isfinite(m['inventory_turns']) else "—")
+    r1[2].metric("📦 Days of cover", f"{m['aggregate_cover']:.1f}d" if np.isfinite(m['aggregate_cover']) else "—")
+    r1[3].metric("🟢 Lead-time coverage", f"{m['lead_time_coverage_pct']:.1f}%")
+
+    r2 = st.columns(4)
+    r2[0].metric("🔴 Critical SKUs", f"{K['critical']}", f"{m['critical_pct']:.1f}% of SKUs")
+    r2[1].metric("⚠️ Service risk", f"€{m['service_risk_value']:,.0f}", f"{(m['service_risk_value']/m['inventory_value']*100):.1f}% of inventory" if m['inventory_value'] else "—")
+    r2[2].metric("🟡 Excess inventory", f"€{m['excess_value']:,.0f}", f"{m['excess_pct']:.1f}% of inventory")
+    r2[3].metric("🛒 Purchase requirement", f"€{m['purchase_value']:,.0f}", f"{m['purchase_to_inventory_pct']:.1f}% of inventory" if m['inventory_value'] else "—")
+
+    r3 = st.columns(4)
+    r3[0].metric("📨 Open PO value", f"€{m['open_po_value']:,.0f}")
+    r3[1].metric("🚚 Avg lead time", f"{m['avg_lead_time']:.1f}d")
+    r3[2].metric("🏭 Suppliers", int(a["Supplier"].nunique()))
+    r3[3].metric("📈 Next-month forecast", f"{a['Forecast_Next_Month'].sum():,.0f} units")
+
+    st.divider()
+
+    c1, c2 = st.columns(2)
+    with c1:
+        st.markdown("#### 📈 Sales value vs inventory value")
+        if not d["trend"].empty:
+            trend_chart = d["trend"].set_index("Period")[["Sales_Value", "Inventory_Value"]]
+            st.line_chart(trend_chart, use_container_width=True)
+        else:
+            st.info("No monthly history available for the trend chart.")
+    with c2:
+        st.markdown("#### 📦 Inventory health")
+        status_chart = d["status"].set_index("Status")[["SKUs"]]
+        st.bar_chart(status_chart, use_container_width=True)
+
+    c3, c4 = st.columns(2)
+    with c3:
+        st.markdown("#### 🚚 Supplier exposure")
+        supplier_chart = d["supplier"].head(10).set_index("Supplier")[["Inventory_Value", "Service_Risk_Value", "Purchase_Value"]]
+        st.bar_chart(supplier_chart, use_container_width=True)
+    with c4:
+        st.markdown("#### ⏱️ Lead-time profile")
+        lead_chart = d["lead_bins"].set_index("Lead_Time_Bucket")[["SKUs"]]
+        st.bar_chart(lead_chart, use_container_width=True)
+
+    st.markdown("#### 🧩 ABC / XYZ portfolio")
+    abc_display = d["abc_xyz"].set_index("ABC_Class")
+    st.dataframe(abc_display, use_container_width=True)
+
+    st.markdown("#### 📋 Logistics KPI catalogue")
+    kpi_display = d["kpis"].copy()
+    kpi_display["Value"] = kpi_display.apply(
+        lambda row: (
+            f"€{row['Value']:,.0f}" if row["Unit"] == "€" else
+            f"{row['Value']:.2f}x" if row["Unit"] == "x" else
+            f"{row['Value']:.1f}d" if row["Unit"] == "days" else
+            f"{row['Value']:.1f}%" if row["Unit"] == "%" else
+            f"{row['Value']:,.0f}" if isinstance(row["Value"], (int, float, np.integer, np.floating)) else str(row["Value"])
+        ), axis=1
+    )
+    st.dataframe(kpi_display, use_container_width=True, hide_index=True)
+
+    st.markdown("#### 🔎 What the dashboard is telling the planner")
+    insights = []
+    if m["lead_time_coverage_pct"] < 90:
+        insights.append(f"**Service exposure:** only {m['lead_time_coverage_pct']:.1f}% of SKUs currently cover lead-time demand.")
+    else:
+        insights.append(f"**Service coverage:** {m['lead_time_coverage_pct']:.1f}% of SKUs cover lead-time demand.")
+    if m["excess_pct"] >= 20:
+        insights.append(f"**Working capital:** excess inventory represents {m['excess_pct']:.1f}% of current inventory value.")
+    if m["purchase_to_inventory_pct"] >= 20:
+        insights.append(f"**Replenishment pressure:** recommended purchases equal {m['purchase_to_inventory_pct']:.1f}% of current inventory value.")
+    if m["avg_lead_time"] > 30:
+        insights.append(f"**Lead-time exposure:** average supplier lead time is {m['avg_lead_time']:.1f} days.")
+    if not insights:
+        insights.append("The current portfolio has no major threshold breach under the selected planning parameters.")
+    for insight in insights:
+        st.info(insight)
+
+    dashboard_export = _excel_tab_export_bytes(
+        "Logistics KPI Dashboard",
+        {
+            "KPI Catalogue": d["kpis"],
+            "Monthly Trend": d["trend"],
+            "Supplier Exposure": d["supplier"],
+            "ABC XYZ": d["abc_xyz"],
+            "Lead Time Profile": d["lead_bins"],
+            "Inventory Health": d["status"],
+        },
+        {
+            "Inventory value": m["inventory_value"],
+            "Inventory turns": m["inventory_turns"] if np.isfinite(m["inventory_turns"]) else "—",
+            "Days of cover": m["aggregate_cover"] if np.isfinite(m["aggregate_cover"]) else "—",
+            "Lead-time coverage %": m["lead_time_coverage_pct"],
+            "Service risk": m["service_risk_value"],
+            "Excess inventory": m["excess_value"],
+            "Purchase requirement": m["purchase_value"],
+            "Open PO value": m["open_po_value"],
+        }
+    )
+    if dashboard_export:
+        st.download_button(
+            "📗 Export Logistics KPI Dashboard to Excel",
+            dashboard_export,
+            "logistics_kpi_dashboard.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+            key="logistics_dashboard_excel"
+        )
+    st.caption("Service and coverage KPIs are planning proxies derived from inventory, demand and lead-time data; they are not OTIF or customer fill-rate measurements unless those source fields are provided.")
+
+# -----------------------------
+# Planning Agent
+# -----------------------------
+with tabs[2]:
     st.subheader("🧠 Planning Agent")
     st.caption("Turns the decision engine into an ordered sequence of planner actions.")
 
@@ -2565,7 +2871,7 @@ with tabs[1]:
 # -----------------------------
 # Inventory
 # -----------------------------
-with tabs[2]:
+with tabs[3]:
     st.subheader("Inventory health")
     left, right = st.columns(2)
     with left:
@@ -2590,7 +2896,7 @@ with tabs[2]:
 # -----------------------------
 # Forecast
 # -----------------------------
-with tabs[3]:
+with tabs[4]:
     st.subheader("Demand outlook")
     f = a[[
         "SKU","Description","Annual_Sales","Avg_Monthly_Demand",
@@ -2613,7 +2919,7 @@ with tabs[3]:
 # -----------------------------
 # ABC/XYZ
 # -----------------------------
-with tabs[4]:
+with tabs[5]:
     st.subheader("Segmentation")
     abc_view = a[[
         "SKU","Description","Annual_Consumption_Value",
@@ -2631,7 +2937,7 @@ with tabs[4]:
 # -----------------------------
 # Suppliers
 # -----------------------------
-with tabs[5]:
+with tabs[6]:
     st.subheader("Supplier exposure")
     sup = a.groupby("Supplier", as_index=False).agg(
         SKUs=("SKU","count"),
@@ -2652,7 +2958,7 @@ with tabs[5]:
 # -----------------------------
 # Scenarios
 # -----------------------------
-with tabs[6]:
+with tabs[7]:
     st.subheader("🧪 Policy simulator")
     st.caption("Simula decisiones antes de cambiar la política.")
     s1, s2 = st.columns(2)
@@ -2728,12 +3034,12 @@ def _excel_data_quality_bytes(raw, dq):
 # -----------------------------
 # Data Quality
 # -----------------------------
-with tabs[7]:
+with tabs[8]:
     st.subheader("🧹 Data Quality")
     st.caption("Checks the data before operational decisions are used.")
 
     dq_summary = data_quality_summary(raw, dq)
-    q1, q2, q3, q4, q5, q6 = st.columns(6)
+    q1, q2, q3, q4, q5 = st.columns(5)
     q1.metric("Rows", dq_summary["rows"])
     q2.metric("SKUs", dq_summary["skus"])
     q3.metric("Suppliers", dq_summary["suppliers"])
@@ -2790,7 +3096,7 @@ with tabs[7]:
 # -----------------------------
 # Action Plan
 # -----------------------------
-with tabs[8]:
+with tabs[9]:
     st.subheader("📝 Weekly Action Plan")
     st.caption("Planner-ready worklist generated by the Decision Engine.")
 
@@ -2891,7 +3197,7 @@ with tabs[8]:
 # -----------------------------
 # Change Monitor
 # -----------------------------
-with tabs[9]:
+with tabs[10]:
     st.subheader("🔄 What changed?")
     if not comparison_meta.get("has_comparison"):
         st.info("Necesitas al menos dos periodos históricos para comparar la evolución.")
@@ -2979,9 +3285,9 @@ with tabs[9]:
 # -----------------------------
 # Copilot
 # -----------------------------
-with tabs[10]:
+with tabs[11]:
     st.subheader("⚡ Quick analyses")
-    q1, q2, q3, q4, q5 = st.columns(5)
+    q1, q2, q3, q4, q5, q6 = st.columns(6)
     quick_question = None
     if q1.button("🛒 Purchase priorities"):
         quick_question = "¿Qué debería comprar esta semana y cuáles son las 3 prioridades más importantes?"
@@ -2993,15 +3299,15 @@ with tabs[10]:
         quick_question = "¿Qué cambios de demanda pueden cambiar mis decisiones de compra?"
     if q5.button("🔄 What changed?"):
         quick_question = "¿Qué ha cambiado entre el último periodo y el anterior y cuáles son las 3 mayores variaciones?"
-    if q6.button("🧠 Action sequence"):
-        quick_question = "¿Qué debería hacer primero, segundo y tercero y por qué?"
+    if q6.button("📊 Logistics KPIs"):
+        quick_question = "¿Cuál es el estado de los principales KPI logísticos y cuáles requieren atención?"
     if quick_question:
         st.session_state.chat.append({"role": "user", "content": quick_question})
         with st.chat_message("user"):
             st.markdown(quick_question)
         with st.chat_message("assistant"):
             with st.spinner("Ejecutando análisis de Supply Chain..."):
-                ans = ai_chat(quick_question, a, effective_key, model, comparison, comparison_meta)
+                ans = ai_chat(quick_question, a, effective_key, model, comparison, comparison_meta, raw)
             st.markdown(ans)
         st.session_state.chat.append({"role": "assistant", "content": ans})
 
@@ -3017,14 +3323,14 @@ with tabs[10]:
             st.markdown(q)
         with st.chat_message("assistant"):
             with st.spinner("Analyzing..."):
-                ans = ai_chat(q, a, effective_key, model, comparison, comparison_meta)
+                ans = ai_chat(q, a, effective_key, model, comparison, comparison_meta, raw)
             st.markdown(ans)
         st.session_state.chat.append({"role":"assistant","content":ans})
 
 # -----------------------------
 # Export
 # -----------------------------
-with tabs[11]:
+with tabs[12]:
     st.subheader("📤 Reporting Center")
     st.caption("Visual HTML reports and professional Excel workbooks containing the same decision-ready information.")
 
@@ -3150,4 +3456,4 @@ with tabs[11]:
 
 
 st.divider()
-st.caption("Supply Chain AI Copilot V1.6 — recommendations require planner validation before execution.")
+st.caption("Supply Chain AI Copilot V2.0.5 — recommendations require planner validation before execution.")
