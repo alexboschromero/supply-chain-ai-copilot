@@ -167,95 +167,183 @@ def build_context(a):
     cols = list(dict.fromkeys([c for c in cols if c in a.columns]))
     return a[cols].round(2).to_csv(index=False)
 
-def ai_chat(question, a, api_key=None):
+def _make_openai_client(api_key):
+    """Create an OpenAI client using Streamlit Secrets or environment settings."""
+    kwargs = {"api_key": api_key.strip()}
+
+    project_id = os.getenv("OPENAI_PROJECT_ID", "").strip()
+    org_id = os.getenv("OPENAI_ORG_ID", "").strip()
+    try:
+        project_id = project_id or str(st.secrets.get("OPENAI_PROJECT_ID", "")).strip()
+        org_id = org_id or str(st.secrets.get("OPENAI_ORG_ID", "")).strip()
+    except Exception:
+        pass
+
+    if project_id:
+        kwargs["project"] = project_id
+    if org_id:
+        kwargs["organization"] = org_id
+
+    return OpenAI(**kwargs)
+
+def _openai_error_info(exc):
+    status = getattr(exc, "status_code", None)
+    body = getattr(exc, "body", None)
+    code = None
+    error_type = None
+
+    if isinstance(body, dict):
+        payload = body.get("error", body)
+        if isinstance(payload, dict):
+            code = payload.get("code")
+            error_type = payload.get("type")
+
+    return status, code, error_type
+
+def test_openai_connection(api_key, model):
+    if not api_key:
+        return False, "No hay API key configurada.", {}
+    if OpenAI is None:
+        return False, "La librería OpenAI no está instalada.", {}
+
+    try:
+        client = _make_openai_client(api_key)
+
+        # Authentication/permissions test independent from the selected model.
+        client.models.list()
+
+        # Small Responses API smoke test.
+        response = client.responses.create(
+            model=model,
+            input="Responde únicamente: conexión OK"
+        )
+        return True, response.output_text, {}
+
+    except Exception as exc:
+        status, code, error_type = _openai_error_info(exc)
+        return False, str(exc), {
+            "http_status": status,
+            "error_code": code,
+            "error_type": error_type,
+            "exception": type(exc).__name__,
+        }
+
+def ai_chat(question, a, api_key=None, model="gpt-5.6-luna"):
     q = question.lower()
 
-    # Local fallback first: useful even when OpenAI is unavailable.
     def local_mode():
         if any(w in q for w in ["compr", "buy", "orden", "purchase"]):
             return decision_text(a)
+
         if any(w in q for w in ["rotura", "riesgo", "stockout", "critical"]):
-            x = a[a["Status"]=="🔴 CRITICAL"]
+            x = a[a["Status"] == "🔴 CRITICAL"]
             if x.empty:
                 return "No se detectan riesgos críticos con los parámetros actuales."
+
             return "### Riesgos críticos\n" + "\n".join(
-                f"- **{r.SKU}**: {r.Days_Cover:.1f} días de cobertura frente a {r.Lead_Time_Days:.0f} días de lead time."
+                f"- **{r.SKU}**: {r.Days_Cover:.1f} días de cobertura frente a "
+                f"{r.Lead_Time_Days:.0f} días de lead time."
                 for _, r in x.sort_values("Decision_Score", ascending=False).iterrows()
             )
+
         if any(w in q for w in ["exceso", "sobrestock", "excess"]):
-            x = a[a["Status"]=="🟡 EXCESS"]
-            return "No se detectan excesos." if x.empty else (
-                "### Exceso de cobertura\n" + "\n".join(
-                    f"- **{r.SKU}**: {r.Days_Cover:.1f} días de cobertura."
-                    for _, r in x.iterrows()
-                )
+            x = a[a["Status"] == "🟡 EXCESS"]
+            if x.empty:
+                return "No se detectan excesos."
+
+            return "### Exceso de cobertura\n" + "\n".join(
+                f"- **{r.SKU}**: {r.Days_Cover:.1f} días de cobertura."
+                for _, r in x.iterrows()
             )
+
         if "forecast" in q or "previsión" in q:
             x = a.sort_values("Forecast_Next_Month", ascending=False).head(10)
             return "### Forecast próximo mes\n" + "\n".join(
-                f"- **{r.SKU}**: {r.Forecast_Next_Month:.0f} uds. ({r.Forecast_Change_Pct:+.1f}% vs media)."
+                f"- **{r.SKU}**: {r.Forecast_Next_Month:.0f} uds. "
+                f"({r.Forecast_Change_Pct:+.1f}% vs media)."
                 for _, r in x.iterrows()
             )
+
         if "proveedor" in q or "supplier" in q:
             x = a.groupby("Supplier", as_index=False).agg(
-                Critical=("Status", lambda s: (s=="🔴 CRITICAL").sum()),
+                Critical=("Status", lambda s: (s == "🔴 CRITICAL").sum()),
                 Inventory_Value=("Inventory_Value", "sum"),
                 Purchase_Value=("Purchase_Value", "sum")
-            ).sort_values(["Critical","Inventory_Value"], ascending=[False,False])
+            ).sort_values(["Critical", "Inventory_Value"], ascending=[False, False])
+
             return "### Proveedores a vigilar\n" + "\n".join(
-                f"- **{r.Supplier}**: {int(r.Critical)} SKUs críticos; inventario €{r.Inventory_Value:,.0f}; compras €{r.Purchase_Value:,.0f}."
+                f"- **{r.Supplier}**: {int(r.Critical)} SKUs críticos; "
+                f"inventario €{r.Inventory_Value:,.0f}; compras €{r.Purchase_Value:,.0f}."
                 for _, r in x.head(10).iterrows()
             )
-        return "Puedo ayudarte con compras, riesgos de rotura, exceso, forecast y proveedores."
+
+        return (
+            "Puedo ayudarte con compras, riesgos de rotura, exceso, "
+            "forecast y proveedores."
+        )
 
     if not api_key:
         return local_mode()
 
     if OpenAI is None:
-        return "OpenAI no está instalado en el entorno. Usa el modo local o actualiza requirements.txt."
+        return "OpenAI no está instalado. Usa el modo local."
 
     try:
-        client = OpenAI(api_key=api_key.strip())
-        ctx = build_context(a)
-        resp = client.responses.create(
-            model="gpt-5-mini",
+        client = _make_openai_client(api_key)
+
+        context = build_context(a)
+
+        response = client.responses.create(
+            model=model,
             instructions=(
                 "Eres el Supply Chain AI Copilot de una empresa. Responde en español. "
-                "Usa únicamente los datos entregados. No inventes números. "
-                "Primero resume los hechos, después recomienda acciones concretas. "
+                "Usa exclusivamente los datos proporcionados. No inventes números. "
+                "Primero resume los hechos y luego recomienda acciones concretas. "
                 "Prioriza riesgo de stockout, impacto económico y nivel de servicio. "
-                "Cuando exista incertidumbre o falten datos, dilo. "
-                "No ejecutes compras: prepara recomendaciones para validación humana."
+                "Si faltan datos, dilo. No ejecutes compras: prepara recomendaciones "
+                "para validación humana."
             ),
-            input=f"PREGUNTA:\n{question}\n\nDATOS CALCULADOS:\n{ctx}",
+            input=f"PREGUNTA:\n{question}\n\nDATOS CALCULADOS:\n{context}",
         )
-        return resp.output_text
 
-    except AuthenticationError:
+        return response.output_text
+
+    except AuthenticationError as exc:
+        status, code, error_type = _openai_error_info(exc)
         return (
-            "### ⚠️ No pude autenticarme con OpenAI\n\n"
-            "La aplicación está funcionando, pero OpenAI ha rechazado la API key configurada.\n\n"
-            "**Qué revisar:**\n"
-            "1. Ve a la página de API Keys de OpenAI y comprueba que la clave es válida.\n"
-            "2. En Streamlit, abre **Manage app → Settings → Secrets**.\n"
-            "3. Deja exactamente:\n\n"
-            "```toml\nOPENAI_API_KEY = \"tu_clave\"\n```\n\n"
-            "4. Guarda los Secrets y reinicia/reabre la app.\n\n"
-            "Mientras tanto puedes seguir utilizando el Copilot en modo local."
+            "### ⚠️ OpenAI ha rechazado la autenticación\n\n"
+            f"HTTP: `{status or 'desconocido'}` · "
+            f"code: `{code or 'desconocido'}` · "
+            f"type: `{error_type or 'desconocido'}`\n\n"
+            "Revisa la API key y el proyecto configurados en Streamlit Secrets."
         )
-    except RateLimitError:
+
+    except RateLimitError as exc:
+        status, code, error_type = _openai_error_info(exc)
         return (
             "### ⚠️ Límite o cuota de OpenAI\n\n"
-            "OpenAI aceptó la autenticación, pero la solicitud fue limitada por cuota o rate limit. "
-            "Comprueba el uso y la facturación de tu proyecto."
+            f"HTTP: `{status or 'desconocido'}` · "
+            f"code: `{code or 'desconocido'}` · "
+            f"type: `{error_type or 'desconocido'}`"
         )
-    except APIError as e:
-        return f"### ⚠️ Error de OpenAI\n\nLa API devolvió un error. Detalle: `{str(e)}`\n\nPuedes seguir usando el modo local."
-    except Exception as e:
+
+    except APIError as exc:
+        status, code, error_type = _openai_error_info(exc)
         return (
-            f"### ⚠️ Error al consultar el Copilot\n\n"
-            f"`{type(e).__name__}: {str(e)}`\n\n"
-            "La aplicación no se cerrará. El resto del análisis sigue disponible."
+            "### ⚠️ Error de API OpenAI\n\n"
+            f"HTTP: `{status or 'desconocido'}` · "
+            f"code: `{code or 'desconocido'}` · "
+            f"type: `{error_type or 'desconocido'}`"
+        )
+
+    except Exception as exc:
+        status, code, error_type = _openai_error_info(exc)
+        return (
+            "### ⚠️ Error al consultar OpenAI\n\n"
+            f"`{type(exc).__name__}` · "
+            f"HTTP `{status or 'desconocido'}` · "
+            f"code `{code or 'desconocido'}` · "
+            f"type `{error_type or 'desconocido'}`"
         )
 
 def export_purchase(a):
@@ -281,36 +369,74 @@ with st.sidebar:
     uploaded = st.file_uploader("CSV histórico", type=["csv"])
     safety_days = st.slider("Safety stock floor (días)", 0, 90, 10)
     service = st.select_slider("Service level", options=[0.90,0.95,0.975,0.99], value=0.95)
+    st.subheader("🤖 OpenAI")
+
     secret_key = ""
     try:
         secret_key = str(st.secrets.get("OPENAI_API_KEY", "")).strip()
     except Exception:
         secret_key = ""
+
     env_key = os.getenv("OPENAI_API_KEY", "").strip()
-    api_key = st.text_input(
-        "OpenAI API key",
-        type="password",
-        value=secret_key or env_key
-    ).strip()
-    st.divider()
-    st.caption("La API key es opcional. Sin ella, el Copilot funciona en modo local.")
-    if api_key and st.button("🔌 Probar conexión OpenAI", use_container_width=True):
-        try:
-            client = OpenAI(api_key=api_key)
-            test = client.responses.create(
-                model="gpt-5-mini",
-                input="Responde únicamente: conexión OK"
-            )
-            st.success("✅ Conexión OpenAI correcta.")
-            st.caption(test.output_text)
-        except AuthenticationError:
-            st.error("❌ OpenAI ha rechazado la API key. Revisa la clave y vuelve a guardarla en Secrets.")
-        except RateLimitError:
-            st.warning("⚠️ OpenAI ha rechazado temporalmente la solicitud por límites/cuota.")
-        except APIError as e:
-            st.error(f"❌ Error de API de OpenAI: {str(e)}")
-        except Exception as e:
-            st.error(f"❌ Error al probar OpenAI: {str(e)}")
+    stored_key = secret_key or env_key
+
+    source = (
+        "Streamlit Secrets" if secret_key
+        else ("Environment variable" if env_key else "None")
+    )
+
+    model = st.selectbox(
+        "Modelo",
+        ["gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol"],
+        index=0,
+        help="Modelos actuales disponibles en la Responses API."
+    )
+
+    if stored_key:
+        prefix = stored_key[:8] if len(stored_key) >= 8 else stored_key
+        suffix = stored_key[-4:] if len(stored_key) >= 4 else ""
+        st.success(f"API key detectada · {source}")
+        st.caption(f"Fingerprint: `{prefix}…{suffix}`")
+    else:
+        st.warning("No hay OPENAI_API_KEY configurada. Se usará el modo local.")
+
+    use_manual = st.checkbox(
+        "Probar otra clave solo en esta sesión",
+        value=False
+    )
+
+    manual_key = ""
+    if use_manual:
+        manual_key = st.text_input(
+            "API key manual",
+            type="password"
+        ).strip()
+
+    effective_key = manual_key if use_manual and manual_key else stored_key
+
+    if st.button("🔌 Diagnosticar conexión OpenAI", use_container_width=True):
+        ok, message, details = test_openai_connection(effective_key, model)
+
+        if ok:
+            st.success(f"✅ OpenAI conectado: {message}")
+        else:
+            st.error("❌ No se pudo validar la conexión.")
+            if details:
+                st.code(
+                    f"HTTP: {details.get('http_status')}\n"
+                    f"Code: {details.get('error_code')}\n"
+                    f"Type: {details.get('error_type')}\n"
+                    f"Exception: {details.get('exception')}\n"
+                    f"Message: {message}",
+                    language="text"
+                )
+            else:
+                st.code(message, language="text")
+
+    st.caption(
+        "La API key nunca se muestra completa ni se guarda en GitHub."
+    )
+
     if st.button("🔄 Cargar demo"):
         st.session_state.analysis = analyze(sample_data(), safety_days, service)
         st.session_state.chat = []
@@ -485,7 +611,7 @@ with tabs[6]:
             st.markdown(q)
         with st.chat_message("assistant"):
             with st.spinner("Analyzing..."):
-                ans = ai_chat(q, a, api_key)
+                ans = ai_chat(q, a, effective_key, model)
             st.markdown(ans)
         st.session_state.chat.append({"role":"assistant","content":ans})
 
