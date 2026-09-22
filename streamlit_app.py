@@ -659,7 +659,7 @@ _REPORT_TRANSLATIONS_ES = {
     "Planner-ready operational worklist with ownership and deadlines.":"Lista operativa preparada para el planner, con responsables y fechas límite.",
     "Supplier concentration, service exposure and purchasing exposure.":"Concentración de proveedores, exposición de servicio y exposición de compras.",
     "Generated":"Generado", "Decision support only. Validate purchase execution and supplier commitments before release.":"Solo para soporte a la decisión. Valida la ejecución de compras y los compromisos de los proveedores antes de su liberación.",
-    "Supply Chain AI Copilot V2.0.13":"Supply Chain AI Copilot V2.0.13",
+    "Supply Chain AI Copilot V2.0.14":"Supply Chain AI Copilot V2.0.14",
     "No comparable periods are available.":"No hay periodos comparables disponibles.",
 }
 
@@ -712,7 +712,7 @@ td{{padding:10px;border-bottom:1px solid var(--line);vertical-align:top}}
 <div class="header">
 <h1>{html_lib.escape(title)}</h1>
 <p>{html_lib.escape(subtitle)}</p>
-<div class="meta">Generated {generated} · Supply Chain AI Copilot V2.0.13</div>
+<div class="meta">Generated {generated} · Supply Chain AI Copilot V2.0.14</div>
 </div>
 {body}
 <div class="footer">Decision support only. Validate purchase execution and supplier commitments before release.</div>
@@ -2554,7 +2554,7 @@ if "language" not in st.session_state:
 
 _TRANSLATIONS = {
     "Spanish": {
-        "Decision Intelligence for planners · V2.0.13": "Inteligencia de decisiones para planners · V2.0.13",
+        "Decision Intelligence for planners · V2.0.14": "Inteligencia de decisiones para planners · V2.0.13",
         "Historical demand and inventory": "Histórico de demanda e inventario",
         "Upload historical demand and inventory data for analysis. CSV and Excel are supported.": "Carga datos históricos de demanda e inventario para ejecutar el análisis. Se admiten CSV y Excel.",
         "Safety stock floor (days)": "Stock de seguridad mínimo (días)",
@@ -2885,8 +2885,8 @@ _TRANSLATIONS["Spanish"].update({
     "The MVP forecast uses a weighted average of the last 6 months plus a linear trend. The next iteration can add seasonality, intermittent demand and alternative models.": "El forecast del MVP utiliza una media ponderada de los últimos 6 meses más una tendencia lineal. La siguiente iteración puede añadir estacionalidad, demanda intermitente y modelos alternativos.",
     "HTML and Excel use the current filtered view. HTML includes KPIs and an executive presentation; Excel includes Summary, Action Plan and Supplier Summary with filters.": "HTML y Excel utilizan la vista filtrada actual. HTML incluye KPIs y una presentación ejecutiva; Excel incluye Summary, Action Plan y Supplier Summary con filtros.",
     "Need at least two historical periods to compare evolution.": "Se necesitan al menos dos periodos históricos para comparar la evolución.",
-    "📦 Supply Chain AI Copilot V2.0.13 — recommendations require planner validation before execution.": "📦 Supply Chain AI Copilot V2.0.13 — las recomendaciones requieren validación del planner antes de su ejecución.",
-    "Supply Chain AI Copilot V2.0.13 — recommendations require planner validation before execution.": "Supply Chain AI Copilot V2.0.13 — las recomendaciones requieren validación del planner antes de su ejecución.",
+    "📦 Supply Chain AI Copilot V2.0.14 — recommendations require planner validation before execution.": "📦 Supply Chain AI Copilot V2.0.14 — las recomendaciones requieren validación del planner antes de su ejecución.",
+    "Supply Chain AI Copilot V2.0.14 — recommendations require planner validation before execution.": "Supply Chain AI Copilot V2.0.14 — las recomendaciones requieren validación del planner antes de su ejecución.",
     "Safety stock floor": "Stock de seguridad mínimo", "Service level target": "Objetivo de nivel de servicio",
     "Language": "Idioma", "rows": "filas", "suppliers": "proveedores", "units": "unidades", "Fingerprint": "Huella",
     "Executive": "Ejecutivo", "Action Plan": "Plan de acción", "Data Quality": "Calidad de datos", "Inventory Risk": "Riesgo de inventario",
@@ -3034,7 +3034,7 @@ div[data-testid="stExpander"] { border-radius: 12px; }
 # -----------------------------
 with st.sidebar:
     st.markdown("## 📦 Supply Chain AI")
-    st.caption(tr("Decision Intelligence for planners · V2.0.13"))
+    st.caption(tr("Decision Intelligence for planners · V2.0.14"))
 
     language_choice = st.selectbox(f"🌐 {tr('Language')}", ["English", "Español"], index=0 if st.session_state.language == "English" else 1, key="language_selector")
     st.session_state.language = "English" if language_choice == "English" else "Spanish"
@@ -3142,7 +3142,7 @@ def _excel_tab_export_bytes(title, sheets, kpis=None):
         summary = wb.add_worksheet(tr("Summary"))
         summary.hide_gridlines(2)
         summary.write(0, 0, title, title_fmt)
-        summary.write(1, 0, "Exported from Supply Chain AI Copilot V2.0.13", subtitle_fmt)
+        summary.write(1, 0, "Exported from Supply Chain AI Copilot V2.0.14", subtitle_fmt)
         if kpis:
             summary.write(3, 0, "Key metrics", header_fmt)
             for i, (label, value) in enumerate(kpis.items(), start=4):
@@ -4096,7 +4096,7 @@ with tabs[8]:
         b3.metric(tr("Components"), bom["Component_SKU"].nunique())
         b4.metric(tr("Max scrap %"), f"{bom['Scrap_Pct'].max():.1f}%")
         st.dataframe(bom[["Parent_SKU","Component_SKU","Qty_Per","Scrap_Pct"]].head(100), use_container_width=True, hide_index=True)
-        dataset_skus=set(a_source["SKU"].astype(str))
+        dataset_skus=set(raw["SKU"].astype(str))
         missing_components=sorted(set(bom["Component_SKU"].astype(str))-dataset_skus)
         missing_parents=sorted(set(bom["Parent_SKU"].astype(str))-dataset_skus)
         if missing_components:
@@ -4112,7 +4112,7 @@ with tabs[8]:
         with p4: use_open_po=st.checkbox(tr("Use open POs as month-1 receipts"),True,key="mrp_open_po")
 
         parent_options=sorted(bom["Parent_SKU"].unique().tolist())
-        available_parent=[x for x in parent_options if x in set(a_source["SKU"].astype(str))]
+        available_parent=[x for x in parent_options if x in dataset_skus]
         selected_parents=st.multiselect(tr("Parent SKUs"),available_parent,default=available_parent[:min(50,len(available_parent))],key="mrp_parents",placeholder=tr("All parent SKUs"))
         if not selected_parents: selected_parents=available_parent
 
@@ -4614,4 +4614,4 @@ with tabs[13]:
 
 
 st.divider()
-st.caption(tr("Supply Chain AI Copilot V2.0.13 — recommendations require planner validation before execution."))
+st.caption(tr("Supply Chain AI Copilot V2.0.14 — recommendations require planner validation before execution."))
