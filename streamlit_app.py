@@ -6,9 +6,12 @@ import numpy as np
 import streamlit as st
 
 try:
-    from openai import OpenAI
+    from openai import OpenAI, AuthenticationError, APIError, RateLimitError
 except Exception:
     OpenAI = None
+    AuthenticationError = Exception
+    APIError = Exception
+    RateLimitError = Exception
 
 st.set_page_config(
     page_title="Supply Chain AI Copilot",
@@ -165,8 +168,10 @@ def build_context(a):
     return a[cols].round(2).to_csv(index=False)
 
 def ai_chat(question, a, api_key=None):
-    if not api_key or OpenAI is None:
-        q = question.lower()
+    q = question.lower()
+
+    # Local fallback first: useful even when OpenAI is unavailable.
+    def local_mode():
         if any(w in q for w in ["compr", "buy", "orden", "purchase"]):
             return decision_text(a)
         if any(w in q for w in ["rotura", "riesgo", "stockout", "critical"]):
@@ -185,23 +190,73 @@ def ai_chat(question, a, api_key=None):
                     for _, r in x.iterrows()
                 )
             )
-        return "Puedo ayudarte con compras, riesgos de rotura, exceso, forecast, proveedores y segmentación ABC/XYZ."
+        if "forecast" in q or "previsión" in q:
+            x = a.sort_values("Forecast_Next_Month", ascending=False).head(10)
+            return "### Forecast próximo mes\n" + "\n".join(
+                f"- **{r.SKU}**: {r.Forecast_Next_Month:.0f} uds. ({r.Forecast_Change_Pct:+.1f}% vs media)."
+                for _, r in x.iterrows()
+            )
+        if "proveedor" in q or "supplier" in q:
+            x = a.groupby("Supplier", as_index=False).agg(
+                Critical=("Status", lambda s: (s=="🔴 CRITICAL").sum()),
+                Inventory_Value=("Inventory_Value", "sum"),
+                Purchase_Value=("Purchase_Value", "sum")
+            ).sort_values(["Critical","Inventory_Value"], ascending=[False,False])
+            return "### Proveedores a vigilar\n" + "\n".join(
+                f"- **{r.Supplier}**: {int(r.Critical)} SKUs críticos; inventario €{r.Inventory_Value:,.0f}; compras €{r.Purchase_Value:,.0f}."
+                for _, r in x.head(10).iterrows()
+            )
+        return "Puedo ayudarte con compras, riesgos de rotura, exceso, forecast y proveedores."
 
-    client = OpenAI(api_key=api_key)
-    ctx = build_context(a)
-    resp = client.responses.create(
-        model="gpt-5-mini",
-        instructions=(
-            "Eres el Supply Chain AI Copilot de una empresa. Responde en español. "
-            "Usa únicamente los datos entregados. No inventes números. "
-            "Primero resume los hechos, después recomienda acciones concretas. "
-            "Prioriza riesgo de stockout, impacto económico y nivel de servicio. "
-            "Cuando exista incertidumbre o falten datos, dilo. "
-            "No ejecutes compras: prepara recomendaciones para validación humana."
-        ),
-        input=f"PREGUNTA:\n{question}\n\nDATOS CALCULADOS:\n{ctx}",
-    )
-    return resp.output_text
+    if not api_key:
+        return local_mode()
+
+    if OpenAI is None:
+        return "OpenAI no está instalado en el entorno. Usa el modo local o actualiza requirements.txt."
+
+    try:
+        client = OpenAI(api_key=api_key.strip())
+        ctx = build_context(a)
+        resp = client.responses.create(
+            model="gpt-5-mini",
+            instructions=(
+                "Eres el Supply Chain AI Copilot de una empresa. Responde en español. "
+                "Usa únicamente los datos entregados. No inventes números. "
+                "Primero resume los hechos, después recomienda acciones concretas. "
+                "Prioriza riesgo de stockout, impacto económico y nivel de servicio. "
+                "Cuando exista incertidumbre o falten datos, dilo. "
+                "No ejecutes compras: prepara recomendaciones para validación humana."
+            ),
+            input=f"PREGUNTA:\n{question}\n\nDATOS CALCULADOS:\n{ctx}",
+        )
+        return resp.output_text
+
+    except AuthenticationError:
+        return (
+            "### ⚠️ No pude autenticarme con OpenAI\n\n"
+            "La aplicación está funcionando, pero OpenAI ha rechazado la API key configurada.\n\n"
+            "**Qué revisar:**\n"
+            "1. Ve a la página de API Keys de OpenAI y comprueba que la clave es válida.\n"
+            "2. En Streamlit, abre **Manage app → Settings → Secrets**.\n"
+            "3. Deja exactamente:\n\n"
+            "```toml\nOPENAI_API_KEY = \"tu_clave\"\n```\n\n"
+            "4. Guarda los Secrets y reinicia/reabre la app.\n\n"
+            "Mientras tanto puedes seguir utilizando el Copilot en modo local."
+        )
+    except RateLimitError:
+        return (
+            "### ⚠️ Límite o cuota de OpenAI\n\n"
+            "OpenAI aceptó la autenticación, pero la solicitud fue limitada por cuota o rate limit. "
+            "Comprueba el uso y la facturación de tu proyecto."
+        )
+    except APIError as e:
+        return f"### ⚠️ Error de OpenAI\n\nLa API devolvió un error. Detalle: `{str(e)}`\n\nPuedes seguir usando el modo local."
+    except Exception as e:
+        return (
+            f"### ⚠️ Error al consultar el Copilot\n\n"
+            f"`{type(e).__name__}: {str(e)}`\n\n"
+            "La aplicación no se cerrará. El resto del análisis sigue disponible."
+        )
 
 def export_purchase(a):
     x = a[a["Recommended_Order"] > 0].copy()
@@ -226,10 +281,36 @@ with st.sidebar:
     uploaded = st.file_uploader("CSV histórico", type=["csv"])
     safety_days = st.slider("Safety stock floor (días)", 0, 90, 10)
     service = st.select_slider("Service level", options=[0.90,0.95,0.975,0.99], value=0.95)
-    api_key = st.text_input("OpenAI API key", type="password",
-        value=st.secrets.get("OPENAI_API_KEY","") if hasattr(st, "secrets") else "")
+    secret_key = ""
+    try:
+        secret_key = str(st.secrets.get("OPENAI_API_KEY", "")).strip()
+    except Exception:
+        secret_key = ""
+    env_key = os.getenv("OPENAI_API_KEY", "").strip()
+    api_key = st.text_input(
+        "OpenAI API key",
+        type="password",
+        value=secret_key or env_key
+    ).strip()
     st.divider()
-    st.caption("Puedes usar la app sin API key. El Copilot local responde a las principales preguntas.")
+    st.caption("La API key es opcional. Sin ella, el Copilot funciona en modo local.")
+    if api_key and st.button("🔌 Probar conexión OpenAI", use_container_width=True):
+        try:
+            client = OpenAI(api_key=api_key)
+            test = client.responses.create(
+                model="gpt-5-mini",
+                input="Responde únicamente: conexión OK"
+            )
+            st.success("✅ Conexión OpenAI correcta.")
+            st.caption(test.output_text)
+        except AuthenticationError:
+            st.error("❌ OpenAI ha rechazado la API key. Revisa la clave y vuelve a guardarla en Secrets.")
+        except RateLimitError:
+            st.warning("⚠️ OpenAI ha rechazado temporalmente la solicitud por límites/cuota.")
+        except APIError as e:
+            st.error(f"❌ Error de API de OpenAI: {str(e)}")
+        except Exception as e:
+            st.error(f"❌ Error al probar OpenAI: {str(e)}")
     if st.button("🔄 Cargar demo"):
         st.session_state.analysis = analyze(sample_data(), safety_days, service)
         st.session_state.chat = []
