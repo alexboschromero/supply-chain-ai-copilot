@@ -659,7 +659,7 @@ _REPORT_TRANSLATIONS_ES = {
     "Planner-ready operational worklist with ownership and deadlines.":"Lista operativa preparada para el planner, con responsables y fechas límite.",
     "Supplier concentration, service exposure and purchasing exposure.":"Concentración de proveedores, exposición de servicio y exposición de compras.",
     "Generated":"Generado", "Decision support only. Validate purchase execution and supplier commitments before release.":"Solo para soporte a la decisión. Valida la ejecución de compras y los compromisos de los proveedores antes de su liberación.",
-    "Supply Chain AI Copilot V2.0.9":"Supply Chain AI Copilot V2.0.9",
+    "Supply Chain AI Copilot V2.0.10":"Supply Chain AI Copilot V2.0.10",
     "No comparable periods are available.":"No hay periodos comparables disponibles.",
 }
 
@@ -712,7 +712,7 @@ td{{padding:10px;border-bottom:1px solid var(--line);vertical-align:top}}
 <div class="header">
 <h1>{html_lib.escape(title)}</h1>
 <p>{html_lib.escape(subtitle)}</p>
-<div class="meta">Generated {generated} · Supply Chain AI Copilot V2.0.9</div>
+<div class="meta">Generated {generated} · Supply Chain AI Copilot V2.0.10</div>
 </div>
 {body}
 <div class="footer">Decision support only. Validate purchase execution and supplier commitments before release.</div>
@@ -2390,7 +2390,7 @@ if "language" not in st.session_state:
 
 _TRANSLATIONS = {
     "Spanish": {
-        "Decision Intelligence for planners · V2.0.9": "Inteligencia de decisiones para planners · V2.0.9",
+        "Decision Intelligence for planners · V2.0.10": "Inteligencia de decisiones para planners · V2.0.10",
         "Historical demand and inventory": "Histórico de demanda e inventario",
         "Upload historical demand and inventory data for analysis. CSV and Excel are supported.": "Carga datos históricos de demanda e inventario para ejecutar el análisis. Se admiten CSV y Excel.",
         "Safety stock floor (days)": "Stock de seguridad mínimo (días)",
@@ -2462,6 +2462,26 @@ _TRANSLATIONS = {
         "Manual API key": "API key manual",
         "critical SKUs require attention.": "SKUs críticos requieren atención.",
         "Planning assumptions": "Parámetros de planificación",
+    "Global filters": "Filtros globales",
+    "Filter the operational views without changing the source dataset.": "Filtra las vistas operativas sin modificar el dataset fuente.",
+    "SKU / description search": "Buscar SKU / descripción",
+    "Supplier": "Proveedor",
+    "Inventory status": "Estado del inventario",
+    "ABC class": "Clase ABC",
+    "XYZ class": "Clase XYZ",
+    "All statuses": "Todos los estados",
+    "All suppliers": "Todos los proveedores",
+    "All ABC classes": "Todas las clases ABC",
+    "All XYZ classes": "Todas las clases XYZ",
+    "Reset filters": "Restablecer filtros",
+    "Active filters": "Filtros activos",
+    "Showing": "Mostrando",
+    "of": "de",
+    "filtered SKUs": "SKUs filtrados",
+    "Clear search": "Borrar búsqueda",
+    "No SKUs match the selected filters.": "Ningún SKU coincide con los filtros seleccionados.",
+    "None": "Ninguno",
+    "Search": "Búsqueda",
     }
 }
 
@@ -2472,6 +2492,25 @@ def tr(text):
         return _TRANSLATIONS["Spanish"].get(str(text), str(text))
     return str(text)
 
+_STATUS_LABELS_ES = {
+    "🔴 CRITICAL": "🔴 CRÍTICO",
+    "🟠 REVIEW": "🟠 REVISAR",
+    "🟡 EXCESS": "🟡 EXCESO",
+    "🟢 OK": "🟢 OK",
+}
+
+def status_display_options():
+    canonical = ["🔴 CRITICAL", "🟠 REVIEW", "🟡 EXCESS", "🟢 OK"]
+    if st.session_state.get("language", "English") == "Spanish":
+        return [_STATUS_LABELS_ES[x] for x in canonical]
+    return canonical
+
+def status_from_display(value):
+    if st.session_state.get("language", "English") == "Spanish":
+        reverse = {v:k for k,v in _STATUS_LABELS_ES.items()}
+        return reverse.get(value, value)
+    return value
+
 # Complete UI vocabulary for the bilingual interface. Calculations remain language-neutral.
 _TRANSLATIONS["Spanish"].update({
     "The API key is never displayed in full or stored in GitHub.": "La API key nunca se muestra completa ni se guarda en GitHub.",
@@ -2481,7 +2520,7 @@ _TRANSLATIONS["Spanish"].update({
     "🔄 Period comparison": "🔄 Comparación de periodos",
     "days": "días",
     "Current": "Actual", "Previous": "Anterior",
-    "From raw supply-chain data to prioritized decisions · V2.0.9": "De datos brutos de supply chain a decisiones priorizadas · V2.0.9",
+    "From raw supply-chain data to prioritized decisions · V2.0.10": "De datos brutos de supply chain a decisiones priorizadas · V2.0.10",
     "🔴 Critical": "🔴 Crítico", "🟠 Review": "🟠 Revisar", "🛒 Purchase need": "🛒 Necesidad de compra",
     "💰 Inventory": "💰 Inventario", "📈 Next month": "📈 Próximo mes",
     "Critical inventory exposure": "Exposición de inventario crítico",
@@ -2556,8 +2595,8 @@ _TRANSLATIONS["Spanish"].update({
     "The MVP forecast uses a weighted average of the last 6 months plus a linear trend. The next iteration can add seasonality, intermittent demand and alternative models.": "El forecast del MVP utiliza una media ponderada de los últimos 6 meses más una tendencia lineal. La siguiente iteración puede añadir estacionalidad, demanda intermitente y modelos alternativos.",
     "HTML and Excel use the current filtered view. HTML includes KPIs and an executive presentation; Excel includes Summary, Action Plan and Supplier Summary with filters.": "HTML y Excel utilizan la vista filtrada actual. HTML incluye KPIs y una presentación ejecutiva; Excel incluye Summary, Action Plan y Supplier Summary con filtros.",
     "Need at least two historical periods to compare evolution.": "Se necesitan al menos dos periodos históricos para comparar la evolución.",
-    "📦 Supply Chain AI Copilot V2.0.9 — recommendations require planner validation before execution.": "📦 Supply Chain AI Copilot V2.0.9 — las recomendaciones requieren validación del planner antes de su ejecución.",
-    "Supply Chain AI Copilot V2.0.9 — recommendations require planner validation before execution.": "Supply Chain AI Copilot V2.0.9 — las recomendaciones requieren validación del planner antes de su ejecución.",
+    "📦 Supply Chain AI Copilot V2.0.10 — recommendations require planner validation before execution.": "📦 Supply Chain AI Copilot V2.0.10 — las recomendaciones requieren validación del planner antes de su ejecución.",
+    "Supply Chain AI Copilot V2.0.10 — recommendations require planner validation before execution.": "Supply Chain AI Copilot V2.0.10 — las recomendaciones requieren validación del planner antes de su ejecución.",
     "Safety stock floor": "Stock de seguridad mínimo", "Service level target": "Objetivo de nivel de servicio",
     "Language": "Idioma", "rows": "filas", "suppliers": "proveedores", "units": "unidades", "Fingerprint": "Huella",
     "Executive": "Ejecutivo", "Action Plan": "Plan de acción", "Data Quality": "Calidad de datos", "Inventory Risk": "Riesgo de inventario",
@@ -2705,7 +2744,7 @@ div[data-testid="stExpander"] { border-radius: 12px; }
 # -----------------------------
 with st.sidebar:
     st.markdown("## 📦 Supply Chain AI")
-    st.caption(tr("Decision Intelligence for planners · V2.0.9"))
+    st.caption(tr("Decision Intelligence for planners · V2.0.10"))
 
     language_choice = st.selectbox(f"🌐 {tr('Language')}", ["English", "Español"], index=0 if st.session_state.language == "English" else 1, key="language_selector")
     st.session_state.language = "English" if language_choice == "English" else "Spanish"
@@ -2813,7 +2852,7 @@ def _excel_tab_export_bytes(title, sheets, kpis=None):
         summary = wb.add_worksheet(tr("Summary"))
         summary.hide_gridlines(2)
         summary.write(0, 0, title, title_fmt)
-        summary.write(1, 0, "Exported from Supply Chain AI Copilot V2.0.9", subtitle_fmt)
+        summary.write(1, 0, "Exported from Supply Chain AI Copilot V2.0.10", subtitle_fmt)
         if kpis:
             summary.write(3, 0, "Key metrics", header_fmt)
             for i, (label, value) in enumerate(kpis.items(), start=4):
@@ -2890,8 +2929,94 @@ if not _REQUIRED_ANALYSIS_COLUMNS.issubset(set(a.columns)):
     a = analyze(raw, safety_days, service)
     st.session_state.analysis = a
 
+# ------------------------------------------------------------------
+# Global operational filters
+# ------------------------------------------------------------------
+# The source dataset remains untouched. Filters only affect operational
+# decision views, while Data Quality continues to inspect the full source.
+with st.sidebar:
+    with st.expander(f"🔎 {tr('Global filters')}", expanded=False):
+        st.caption(tr("Filter the operational views without changing the source dataset."))
+
+        if st.button(tr("Reset filters"), use_container_width=True, key="reset_global_filters"):
+            for _k, _v in {
+                "global_sku_search": "",
+                "global_suppliers": [],
+                "global_statuses": [],
+                "global_abc": [],
+                "global_xyz": [],
+            }.items():
+                st.session_state[_k] = _v
+            st.rerun()
+
+        st.text_input(
+            tr("SKU / description search"),
+            key="global_sku_search",
+            placeholder="e.g. SKU-001 or pump",
+            help=tr("Search by SKU or product description.")
+        )
+
+        supplier_options = sorted(a["Supplier"].dropna().astype(str).unique().tolist())
+        st.multiselect(
+            tr("Supplier"),
+            supplier_options,
+            key="global_suppliers",
+            placeholder=tr("All suppliers")
+        )
+
+        st.multiselect(
+            tr("Inventory status"),
+            status_display_options(),
+            key="global_statuses",
+            placeholder=tr("All statuses")
+        )
+        st.multiselect(
+            tr("ABC class"),
+            ["A", "B", "C"],
+            key="global_abc",
+            placeholder=tr("All ABC classes")
+        )
+        st.multiselect(
+            tr("XYZ class"),
+            ["X", "Y", "Z"],
+            key="global_xyz",
+            placeholder=tr("All XYZ classes")
+        )
+
+_search = str(st.session_state.get("global_sku_search", "")).strip().lower()
+_selected_suppliers = set(st.session_state.get("global_suppliers", []))
+_selected_statuses = {status_from_display(x) for x in st.session_state.get("global_statuses", [])}
+_selected_abc = set(st.session_state.get("global_abc", []))
+_selected_xyz = set(st.session_state.get("global_xyz", []))
+
+_filter_mask = pd.Series(True, index=a.index)
+if _search:
+    _filter_mask &= (
+        a["SKU"].astype(str).str.lower().str.contains(_search, regex=False, na=False)
+        | a["Description"].astype(str).str.lower().str.contains(_search, regex=False, na=False)
+    )
+if _selected_suppliers:
+    _filter_mask &= a["Supplier"].astype(str).isin(_selected_suppliers)
+if _selected_statuses:
+    _filter_mask &= a["Status"].astype(str).isin(_selected_statuses)
+if _selected_abc:
+    _filter_mask &= a["ABC"].astype(str).isin(_selected_abc)
+if _selected_xyz:
+    _filter_mask &= a["XYZ"].astype(str).isin(_selected_xyz)
+
+_a_source = a
+a = a.loc[_filter_mask].copy()
+_filtered_skus = set(a["SKU"].astype(str))
+raw_view = raw[raw["SKU"].astype(str).isin(_filtered_skus)].copy()
+
+with st.sidebar:
+    if _filter_mask.all():
+        st.caption(f"{tr('Active filters')}: {tr('None')}" if tr('None') != 'None' else f"{tr('Active filters')}: None")
+    else:
+        st.caption(f"{tr('Active filters')}: {a['SKU'].nunique():,} {tr('of')} {_a_source['SKU'].nunique():,} {tr('filtered SKUs')}")
+
 K = kpis(a)
-logistics_dashboard = build_logistics_dashboard(a, raw)
+logistics_dashboard = build_logistics_dashboard(a, raw_view)
 dq = data_quality_report(raw)
 plan = build_action_plan(a)
 planning, planning_meta = build_planning_agent(a)
@@ -2967,7 +3092,24 @@ a["Forecast_Change_Pct"] = np.where(
 # Header
 # -----------------------------
 st.title("📦 Supply Chain AI Copilot")
-st.caption(tr("From raw supply-chain data to prioritized decisions · V2.0.9"))
+st.caption(tr("From raw supply-chain data to prioritized decisions · V2.0.10"))
+
+if not _filter_mask.any():
+    st.warning(tr("No SKUs match the selected filters."))
+else:
+    _active_filter_parts = []
+    if _search:
+        _active_filter_parts.append(f"{tr('Search')}: {st.session_state.get('global_sku_search')}")
+    if _selected_suppliers:
+        _active_filter_parts.append(f"{tr('Supplier')}: {len(_selected_suppliers)}")
+    if _selected_statuses:
+        _active_filter_parts.append(f"{tr('Inventory status')}: {len(_selected_statuses)}")
+    if _selected_abc:
+        _active_filter_parts.append(f"ABC: {', '.join(sorted(_selected_abc))}")
+    if _selected_xyz:
+        _active_filter_parts.append(f"XYZ: {', '.join(sorted(_selected_xyz))}")
+    if _active_filter_parts:
+        st.info(f"🔎 {tr('Active filters')}: " + " · ".join(_active_filter_parts))
 
 c1,c2,c3,c4,c5,c6 = st.columns(6)
 c1.metric("SKUs", K["sku"])
@@ -3879,4 +4021,4 @@ with tabs[12]:
 
 
 st.divider()
-st.caption("Supply Chain AI Copilot V2.0.9 — recommendations require planner validation before execution.")
+st.caption("Supply Chain AI Copilot V2.0.10 — recommendations require planner validation before execution.")
