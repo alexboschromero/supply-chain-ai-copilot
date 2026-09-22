@@ -1,5 +1,5 @@
 
-import io, os, math, html as html_lib, zipfile
+import io, os, math, html as html_lib, zipfile, inspect
 from datetime import date, timedelta, datetime
 from pathlib import Path
 import pandas as pd
@@ -3102,10 +3102,70 @@ def localize_df(df):
     return out
 
 # Keep calculations in canonical English while presenting tables and common controls in the selected language.
+#
+# Streamlit's native dataframe does not provide Excel-style per-column filters.
+# The wrapper below adds a lightweight, reusable header-filter layer to every
+# dataframe in the application. Filters are applied to the canonical dataframe
+# before localization, so English/Spanish display never affects calculations.
 _original_st_dataframe = st.dataframe
-def _localized_dataframe(data, *args, **kwargs):
-    return _original_st_dataframe(localize_df(data), *args, **kwargs)
-st.dataframe = _localized_dataframe
+
+def _filterable_dataframe(data, *args, **kwargs):
+    if not isinstance(data, pd.DataFrame):
+        return _original_st_dataframe(data, *args, **kwargs)
+
+    df = data.copy()
+    caller = inspect.currentframe().f_back
+    caller_line = caller.f_lineno if caller is not None else 0
+    base_key = kwargs.get("key") or f"table_{caller_line}_{'|'.join(map(str, df.columns))}"
+    safe_key = "".join(ch if ch.isalnum() or ch in "_-" else "_" for ch in str(base_key))[:180]
+
+    # Compact header-style filter controls. We only build the controls when the
+    # user asks for them, keeping large 5,000-SKU datasets responsive by default.
+    if len(df.columns) > 0 and len(df) > 0:
+        is_es = st.session_state.get("language", "English") == "Spanish"
+        filter_label = "🔎 Filtros de cabecera" if is_es else "🔎 Header filters"
+        helper_label = "Filtra cada columna antes de revisar la tabla. Deja el campo vacío para no aplicar filtro." if is_es else "Filter each column before reviewing the table. Clear a filter by leaving it empty."
+        with st.expander(filter_label, expanded=False):
+            st.caption(helper_label)
+            filter_cols = st.columns(min(4, len(df.columns)))
+            for idx, col in enumerate(df.columns):
+                col_name = str(col)
+                with filter_cols[idx % len(filter_cols)]:
+                    st.markdown(f"**{col_name}**")
+                    series = df[col]
+                    widget_key = f"{safe_key}__filter__{idx}"
+                    if pd.api.types.is_numeric_dtype(series):
+                        vals = pd.to_numeric(series, errors="coerce").dropna()
+                        if vals.empty:
+                            continue
+                        lo = float(vals.min())
+                        hi = float(vals.max())
+                        if lo == hi:
+                            st.caption(f"= {lo:g}")
+                            continue
+                        cmin, cmax = st.columns(2)
+                        min_label = "Mín." if is_es else "Min"
+                        max_label = "Máx." if is_es else "Max"
+                        min_val = cmin.number_input(min_label, value=lo, min_value=lo, max_value=hi, key=widget_key+"_min")
+                        max_val = cmax.number_input(max_label, value=hi, min_value=lo, max_value=hi, key=widget_key+"_max")
+                        if min_val > max_val:
+                            st.warning("El mínimo no puede ser mayor que el máximo." if is_es else "Min cannot exceed Max")
+                        else:
+                            df = df[(pd.to_numeric(df[col], errors="coerce") >= min_val) & (pd.to_numeric(df[col], errors="coerce") <= max_val)]
+                    else:
+                        query = st.text_input("Contiene" if is_es else "Contains", key=widget_key, placeholder="Buscar..." if is_es else "Search...")
+                        if query:
+                            mask = df[col].astype(str).str.contains(query, case=False, na=False)
+                            df = df[mask]
+
+            rows_label = "Filas mostradas" if is_es else "Rows shown"
+            st.caption(f"{rows_label}: {len(df):,} / {len(data):,}")
+
+    # Always localize only at render time. Remove our custom key only if needed;
+    # the native dataframe supports its own stable key.
+    return _original_st_dataframe(localize_df(df), *args, **kwargs)
+
+st.dataframe = _filterable_dataframe
 
 _original_st_metric = st.metric
 def _localized_metric(label, *args, **kwargs):
