@@ -665,7 +665,7 @@ td{{padding:10px;border-bottom:1px solid var(--line);vertical-align:top}}
 <div class="header">
 <h1>{html_lib.escape(title)}</h1>
 <p>{html_lib.escape(subtitle)}</p>
-<div class="meta">Generated {generated} · Supply Chain AI Copilot V2.0.1</div>
+<div class="meta">Generated {generated} · Supply Chain AI Copilot V2.0.2</div>
 </div>
 {body}
 <div class="footer">Decision support only. Validate purchase execution and supplier commitments before release.</div>
@@ -2244,6 +2244,65 @@ with st.sidebar:
         st.session_state.chat = []
         st.rerun()
 
+
+
+def _excel_tab_export_bytes(title, sheets, kpis=None):
+    """Create a polished Excel workbook for an individual application tab."""
+    if xlsxwriter is None:
+        return None
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="xlsxwriter") as writer:
+        wb = writer.book
+        title_fmt = wb.add_format({"bold": True, "font_size": 18, "font_color": "#17365D"})
+        subtitle_fmt = wb.add_format({"italic": True, "font_color": "#666666"})
+        header_fmt = wb.add_format({"bold": True, "font_color": "#FFFFFF", "bg_color": "#17365D", "border": 0, "text_wrap": True, "valign": "vcenter"})
+        currency_fmt = wb.add_format({"num_format": '€#,##0.00', "valign": "top"})
+        integer_fmt = wb.add_format({"num_format": '#,##0', "valign": "top"})
+        number_fmt = wb.add_format({"num_format": '#,##0.00', "valign": "top"})
+
+        # Executive summary sheet
+        summary = wb.add_worksheet("Summary")
+        summary.hide_gridlines(2)
+        summary.write(0, 0, title, title_fmt)
+        summary.write(1, 0, "Exported from Supply Chain AI Copilot V2.0.2", subtitle_fmt)
+        if kpis:
+            summary.write(3, 0, "Key metrics", header_fmt)
+            for i, (label, value) in enumerate(kpis.items(), start=4):
+                summary.write(i, 0, label, header_fmt)
+                summary.write(i, 1, value)
+            summary.set_column(0, 0, 28)
+            summary.set_column(1, 1, 22)
+
+        for sheet_name, df in sheets.items():
+            safe_name = str(sheet_name)[:31]
+            out = df.copy() if isinstance(df, pd.DataFrame) else pd.DataFrame(df)
+            out.to_excel(writer, sheet_name=safe_name, index=False, startrow=2)
+            ws = writer.sheets[safe_name]
+            ws.hide_gridlines(2)
+            ws.write(0, 0, f"{title} — {safe_name}", title_fmt)
+            ws.write(1, 0, "Decision-ready table · filters enabled · source: current application view", subtitle_fmt)
+            ws.freeze_panes(3, 0)
+            if len(out.columns):
+                ws.autofilter(2, 0, 2 + max(len(out), 1), len(out.columns)-1)
+            for j, col in enumerate(out.columns):
+                col_lower = str(col).lower()
+                width = min(max(len(str(col)) + 2, 12), 32)
+                if col_lower in {"description", "reason", "change_reason", "execution_task", "dependency", "planning_rationale"}:
+                    width = 34
+                ws.set_column(j, j, width)
+                # Apply sensible formats to numeric/currency columns.
+                if any(k in col_lower for k in ["value", "cost", "exposure", "risk"]):
+                    ws.set_column(j, j, width, currency_fmt)
+                elif any(k in col_lower for k in ["qty", "order", "sales", "stock", "po", "skus", "units", "priority", "critical", "review"]):
+                    ws.set_column(j, j, width, integer_fmt)
+                elif any(k in col_lower for k in ["pct", "cv", "cover", "score", "delta", "lead"]):
+                    ws.set_column(j, j, width, number_fmt)
+            # Format header row consistently after pandas writes it.
+            for j, col in enumerate(out.columns):
+                ws.write(2, j, col, header_fmt)
+
+    return buf.getvalue()
+
 # -----------------------------
 # Load data
 # -----------------------------
@@ -2344,7 +2403,7 @@ a["Forecast_Change_Pct"] = np.where(
 # Header
 # -----------------------------
 st.title("📦 Supply Chain AI Copilot")
-st.caption("From raw supply-chain data to prioritized decisions · V2.0.1")
+st.caption("From raw supply-chain data to prioritized decisions · V2.0.2")
 
 c1,c2,c3,c4,c5,c6 = st.columns(6)
 c1.metric("SKUs", K["sku"])
@@ -2409,6 +2468,31 @@ with tabs[0]:
         st.success("No purchase orders recommended.")
     else:
         st.dataframe(po, use_container_width=True, hide_index=True)
+
+    decision_export = _excel_tab_export_bytes(
+        "Decision Center",
+        {
+            "Priorities": top[[
+                "SKU","Description","Supplier","Status","Action","Action_Timing",
+                "Decision_Confidence","Days_Cover","Lead_Time_Days",
+                "Recommended_Order","Purchase_Value","Decision_Score"
+            ]],
+            "Purchase Plan": po if not po.empty else pd.DataFrame(),
+        },
+        {
+            "SKUs": int(len(a)),
+            "Service risk": float(service_risk_value),
+            "Excess exposure": float(excess_value),
+            "Immediate actions": int((a["Action"].isin(["BUY_NOW","CONFIRM_PO"])).sum()),
+        }
+    )
+    if decision_export:
+        st.download_button(
+            "📗 Export Decision Center to Excel", decision_export,
+            "decision_center_export.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True, key="decision_center_excel"
+        )
 
 # -----------------------------
 # Planning Agent
@@ -2489,14 +2573,19 @@ with tabs[2]:
         st.bar_chart(status_counts)
     with right:
         st.bar_chart(a.groupby("Supplier")["Inventory_Value"].sum())
-    st.dataframe(
-        a[[
-            "SKU","Description","Supplier","Status","Stock","Open_PO",
-            "Days_Cover","Safety_Stock","Recommended_Order",
-            "Inventory_Value","ABC_XYZ","Action","Action_Timing","Decision_Confidence"
-        ]],
-        use_container_width=True, hide_index=True
+    inventory_view = a[[
+        "SKU","Description","Supplier","Status","Stock","Open_PO",
+        "Days_Cover","Safety_Stock","Recommended_Order",
+        "Inventory_Value","ABC_XYZ","Action","Action_Timing","Decision_Confidence"
+    ]]
+    st.dataframe(inventory_view, use_container_width=True, hide_index=True)
+    inventory_export = _excel_tab_export_bytes(
+        "Inventory", {"Inventory Health": inventory_view},
+        {"Inventory value": float(a["Inventory_Value"].sum()), "Service risk": float(a["Service_Risk_Value"].sum()), "Excess exposure": float(a["Excess_Inventory_Value"].sum())}
     )
+    if inventory_export:
+        st.download_button("📗 Export Inventory to Excel", inventory_export, "inventory_export.xlsx",
+                           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True, key="inventory_excel")
 
 # -----------------------------
 # Forecast
@@ -2509,6 +2598,13 @@ with tabs[3]:
         "Trend_Units_Per_Month","Demand_CV"
     ]].sort_values("Forecast_Next_Month", ascending=False)
     st.dataframe(f, use_container_width=True, hide_index=True)
+    forecast_export = _excel_tab_export_bytes(
+        "Forecast", {"Demand Outlook": f},
+        {"SKUs": int(len(f)), "Next-month forecast": float(f["Forecast_Next_Month"].sum()), "Avg monthly demand": float(f["Avg_Monthly_Demand"].sum())}
+    )
+    if forecast_export:
+        st.download_button("📗 Export Forecast to Excel", forecast_export, "forecast_export.xlsx",
+                           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True, key="forecast_excel")
     st.info(
         "El forecast del MVP utiliza una media ponderada de los últimos 6 meses más una tendencia lineal. "
         "La siguiente iteración puede añadir estacionalidad, demanda intermitente y modelos alternativos."
@@ -2519,13 +2615,18 @@ with tabs[3]:
 # -----------------------------
 with tabs[4]:
     st.subheader("Segmentation")
-    st.dataframe(
-        a[[
-            "SKU","Description","Annual_Consumption_Value",
-            "ABC","Demand_CV","XYZ","ABC_XYZ"
-        ]].sort_values("Annual_Consumption_Value", ascending=False),
-        use_container_width=True, hide_index=True
+    abc_view = a[[
+        "SKU","Description","Annual_Consumption_Value",
+        "ABC","Demand_CV","XYZ","ABC_XYZ"
+    ]].sort_values("Annual_Consumption_Value", ascending=False)
+    st.dataframe(abc_view, use_container_width=True, hide_index=True)
+    abc_export = _excel_tab_export_bytes(
+        "ABC XYZ", {"ABC XYZ Segmentation": abc_view},
+        {"SKUs": int(len(abc_view)), "A class": int((abc_view["ABC"]=="A").sum()), "X class": int((abc_view["XYZ"]=="X").sum())}
     )
+    if abc_export:
+        st.download_button("📗 Export ABC/XYZ to Excel", abc_export, "abc_xyz_export.xlsx",
+                           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True, key="abc_xyz_excel")
 
 # -----------------------------
 # Suppliers
@@ -2540,6 +2641,13 @@ with tabs[5]:
         Avg_Cover=("Days_Cover","mean")
     ).sort_values(["Critical","Inventory_Value"], ascending=[False,False])
     st.dataframe(sup, use_container_width=True, hide_index=True)
+    supplier_export = _excel_tab_export_bytes(
+        "Suppliers", {"Supplier Exposure": sup},
+        {"Suppliers": int(len(sup)), "Critical SKUs": int(sup["Critical"].sum()), "Purchase exposure": float(sup["Purchase_Value"].sum()), "Inventory value": float(sup["Inventory_Value"].sum())}
+    )
+    if supplier_export:
+        st.download_button("📗 Export Suppliers to Excel", supplier_export, "suppliers_export.xlsx",
+                           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True, key="suppliers_excel")
 
 # -----------------------------
 # Scenarios
@@ -2669,12 +2777,43 @@ with tabs[8]:
             "text/plain"
         )
 
-    st.download_button(
-        "⬇️ Download filtered action plan",
-        plan_view.drop(columns=["Action_Code"]).to_csv(index=False).encode("utf-8"),
-        "weekly_action_plan.csv",
-        "text/csv"
-    )
+    action_export_df = plan_view.drop(columns=["Action_Code"])
+    st.markdown("### 📤 Export Action Plan")
+    ax1, ax2 = st.columns(2)
+    with ax1:
+        action_html = build_action_report_html(action_export_df)
+        st.download_button(
+            "🌐 Download Action Plan Report (HTML)",
+            action_html.encode("utf-8"),
+            "weekly_action_plan_report.html",
+            "text/html",
+            use_container_width=True, key="action_plan_html"
+        )
+    with ax2:
+        action_xlsx = _excel_tab_export_bytes(
+            "Weekly Action Plan",
+            {
+                "Action Plan": action_export_df,
+                "Supplier Summary": action_export_df.groupby("Supplier", as_index=False).agg(
+                    Actions=("SKU","count"), Purchase_Value=("Purchase_Value","sum")
+                ).sort_values("Purchase_Value", ascending=False)
+            },
+            {
+                "Actions": int(len(action_export_df)),
+                "Immediate": int(action_export_df["Deadline"].eq("Today").sum()),
+                "Purchase value": float(action_export_df["Purchase_Value"].sum()),
+                "Owners": int(action_export_df["Owner"].nunique()),
+            }
+        )
+        if action_xlsx:
+            st.download_button(
+                "📗 Download Action Plan Report (Excel)",
+                action_xlsx,
+                "weekly_action_plan_report.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True, key="action_plan_excel"
+            )
+    st.caption("HTML y Excel utilizan la vista filtrada actual. El HTML incluye KPIs y una presentación ejecutiva; el Excel incluye Summary, Action Plan y Supplier Summary con filtros.")
 
 # -----------------------------
 # Change Monitor
