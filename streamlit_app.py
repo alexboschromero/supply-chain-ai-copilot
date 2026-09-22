@@ -2954,7 +2954,7 @@ _TRANSLATIONS["Spanish"].update({
     "🔄 Period comparison": "🔄 Comparación de periodos",
     "days": "días",
     "Current": "Actual", "Previous": "Anterior",
-    "From raw supply-chain data to prioritized decisions · V2.0.13": "De datos brutos de supply chain a decisiones priorizadas · V2.0.13",
+    "From raw supply-chain data to prioritized decisions · V2.0.23": "De datos brutos de supply chain a decisiones priorizadas · V2.0.23",
     "🔴 Critical": "🔴 Crítico", "🟠 Review": "🟠 Revisar", "🛒 Purchase need": "🛒 Necesidad de compra",
     "💰 Inventory": "💰 Inventario", "📈 Next month": "📈 Próximo mes",
     "Critical inventory exposure": "Exposición de inventario crítico",
@@ -3110,10 +3110,23 @@ _COLUMN_TRANSLATIONS_ES = {
 }
 
 def localize_df(df):
-    if st.session_state.get("language", "English") != "Spanish" or df is None:
+    # Defensive localization: preserve dataframe shape even when tables contain
+    # duplicate/translated column names. Never mutate the caller's dataframe.
+    if df is None or not isinstance(df, pd.DataFrame):
+        return df
+    if st.session_state.get("language", "English") != "Spanish":
         return df
     out = df.copy()
-    out.columns = [_COLUMN_TRANSLATIONS_ES.get(str(c), str(c)) for c in out.columns]
+    translated = [_COLUMN_TRANSLATIONS_ES.get(str(c), str(c)) for c in list(out.columns)]
+    # Pandas allows duplicate labels, but some Streamlit/Pandas operations do not.
+    # Make translated display labels unique without changing the canonical data.
+    seen = {}
+    unique = []
+    for label in translated:
+        n = seen.get(label, 0)
+        unique.append(label if n == 0 else f"{label} ({n+1})")
+        seen[label] = n + 1
+    out.columns = unique
     value_maps = {
         "Status": {"🔴 CRITICAL":"🔴 CRÍTICO", "🟠 REVIEW":"🟠 REVISAR", "🟡 EXCESS":"🟡 EXCESO", "🟢 OK":"🟢 OK"},
         "Action": {"BUY_NOW":"COMPRAR AHORA", "CONFIRM_PO":"CONFIRMAR PO", "DO_NOT_BUY":"NO COMPRAR", "REVIEW":"REVISAR", "MONITOR":"MONITORIZAR", "BUY NOW":"COMPRAR", "BUY":"COMPRAR", "CONFIRM OPEN PO":"CONFIRMAR PO", "REVIEW REPLENISHMENT POLICY":"REVISAR POLÍTICA DE REPOSICIÓN", "BLOCK NEW REPLENISHMENT":"BLOQUEAR NUEVA REPOSICIÓN"},
@@ -3150,21 +3163,24 @@ def _filterable_dataframe(data, *args, **kwargs):
         return _original_st_dataframe(data, *args, **kwargs)
 
     df = data.copy()
-    caller = inspect.currentframe().f_back
-    caller_line = caller.f_lineno if caller is not None else 0
-    base_key = kwargs.get("key") or f"table_{caller_line}_{'|'.join(map(str, df.columns))}"
-    safe_key = "".join(ch if ch.isalnum() or ch in "_-" else "_" for ch in str(base_key))[:180]
+    # Build a deterministic, compact key without depending on caller stack frames.
+    explicit_key = kwargs.get("key")
+    if explicit_key:
+        base_key = str(explicit_key)
+    else:
+        cols_key = "|".join(str(c) for c in df.columns)
+        base_key = f"table_{abs(hash(cols_key))}_{len(df)}_{len(df.columns)}"
+    safe_key = "".join(ch if ch.isalnum() or ch in "_-" else "_" for ch in base_key)[:120]
 
-    # Compact header-style filter controls. We only build the controls when the
-    # user asks for them, keeping large 5,000-SKU datasets responsive by default.
     if len(df.columns) > 0 and len(df) > 0:
         is_es = st.session_state.get("language", "English") == "Spanish"
         filter_label = "🔎 Filtros de cabecera" if is_es else "🔎 Header filters"
-        helper_label = "Filtra cada columna antes de revisar la tabla. Deja el campo vacío para no aplicar filtro." if is_es else "Filter each column before reviewing the table. Clear a filter by leaving it empty."
+        helper_label = ("Filtra cada columna antes de revisar la tabla. Deja el campo vacío para no aplicar filtro."
+                        if is_es else "Filter each column before reviewing the table. Clear a filter by leaving it empty.")
         with st.expander(filter_label, expanded=False):
             st.caption(helper_label)
             filter_cols = st.columns(min(4, len(df.columns)))
-            for idx, col in enumerate(df.columns):
+            for idx, col in enumerate(list(df.columns)):
                 col_name = str(col)
                 with filter_cols[idx % len(filter_cols)]:
                     st.markdown(f"**{col_name}**")
@@ -3174,8 +3190,7 @@ def _filterable_dataframe(data, *args, **kwargs):
                         vals = pd.to_numeric(series, errors="coerce").dropna()
                         if vals.empty:
                             continue
-                        lo = float(vals.min())
-                        hi = float(vals.max())
+                        lo, hi = float(vals.min()), float(vals.max())
                         if lo == hi:
                             st.caption(f"= {lo:g}")
                             continue
@@ -3187,18 +3202,17 @@ def _filterable_dataframe(data, *args, **kwargs):
                         if min_val > max_val:
                             st.warning("El mínimo no puede ser mayor que el máximo." if is_es else "Min cannot exceed Max")
                         else:
-                            df = df[(pd.to_numeric(df[col], errors="coerce") >= min_val) & (pd.to_numeric(df[col], errors="coerce") <= max_val)]
+                            numeric = pd.to_numeric(df[col], errors="coerce")
+                            df = df[numeric.between(min_val, max_val, inclusive="both")]
                     else:
-                        query = st.text_input("Contiene" if is_es else "Contains", key=widget_key, placeholder="Buscar..." if is_es else "Search...")
+                        query = st.text_input("Contiene" if is_es else "Contains", key=widget_key,
+                                              placeholder="Buscar..." if is_es else "Search...")
                         if query:
-                            mask = df[col].astype(str).str.contains(query, case=False, na=False)
-                            df = df[mask]
-
+                            df = df[df[col].astype(str).str.contains(query, case=False, na=False)]
             rows_label = "Filas mostradas" if is_es else "Rows shown"
             st.caption(f"{rows_label}: {len(df):,} / {len(data):,}")
 
-    # Always localize only at render time. Remove our custom key only if needed;
-    # the native dataframe supports its own stable key.
+    # Localize only the final display dataframe. Calculations remain canonical.
     return _original_st_dataframe(localize_df(df), *args, **kwargs)
 
 st.dataframe = _filterable_dataframe
@@ -3596,7 +3610,7 @@ a["Forecast_Change_Pct"] = np.where(
 # Header
 # -----------------------------
 st.title("📦 Supply Chain AI Copilot")
-st.caption(tr("From raw supply-chain data to prioritized decisions · V2.0.13"))
+st.caption(tr("From raw supply-chain data to prioritized decisions · V2.0.23"))
 
 if not _filter_mask.any():
     st.warning(tr("No SKUs match the selected filters."))
