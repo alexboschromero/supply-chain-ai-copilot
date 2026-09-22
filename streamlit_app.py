@@ -544,7 +544,7 @@ td{{padding:10px;border-bottom:1px solid var(--line);vertical-align:top}}
 <div class="header">
 <h1>{html_lib.escape(title)}</h1>
 <p>{html_lib.escape(subtitle)}</p>
-<div class="meta">Generated {generated} · Supply Chain AI Copilot V1.9</div>
+<div class="meta">Generated {generated} · Supply Chain AI Copilot V1.9.1</div>
 </div>
 {body}
 <div class="footer">Decision support only. Validate purchase execution and supplier commitments before release.</div>
@@ -1814,23 +1814,6 @@ with st.sidebar:
         help="Modelos actuales disponibles en la Responses API."
     )
 
-    if len(available_periods) >= 2:
-        with st.expander("🔄 Comparación de periodos"):
-            selected_current = st.selectbox(
-                "Periodo actual",
-                available_periods,
-                index=available_periods.index(default_current),
-                key="change_current_period"
-            )
-            current_idx = available_periods.index(selected_current)
-            prev_options = available_periods[:current_idx] or [available_periods[0]]
-            selected_previous = st.selectbox(
-                "Comparar con",
-                prev_options,
-                index=prev_options.index(default_previous) if default_previous in prev_options else len(prev_options)-1,
-                key="change_previous_period"
-            )
-            st.caption(f"Actual: {selected_current} · Anterior: {selected_previous}")
 
     if stored_key:
         prefix = stored_key[:8] if len(stored_key) >= 8 else stored_key
@@ -1949,6 +1932,28 @@ else:
     comparison_current_a = comparison_previous_a = None
     comparison_meta = {"available_periods": available_periods, "has_comparison": False}
 
+# -----------------------------
+# Comparison controls
+# -----------------------------
+with st.sidebar:
+    if len(available_periods) >= 2:
+        with st.expander("🔄 Comparación de periodos"):
+            selected_current = st.selectbox(
+                "Periodo actual",
+                available_periods,
+                index=available_periods.index(default_current),
+                key="change_current_period"
+            )
+            current_idx = available_periods.index(selected_current)
+            prev_options = available_periods[:current_idx] or [available_periods[0]]
+            selected_previous = st.selectbox(
+                "Comparar con",
+                prev_options,
+                index=prev_options.index(default_previous) if default_previous in prev_options else len(prev_options)-1,
+                key="change_previous_period"
+            )
+            st.caption(f"Actual: {selected_current} · Anterior: {selected_previous}")
+
 # Add/refresh forecast change vs historical monthly average
 a["Forecast_Change_Pct"] = np.where(
     a["Avg_Monthly_Demand"] > 0,
@@ -1960,7 +1965,7 @@ a["Forecast_Change_Pct"] = np.where(
 # Header
 # -----------------------------
 st.title("📦 Supply Chain AI Copilot")
-st.caption("From raw supply-chain data to prioritized decisions · V1.9")
+st.caption("From raw supply-chain data to prioritized decisions · V1.9.1")
 
 c1,c2,c3,c4,c5,c6 = st.columns(6)
 c1.metric("SKUs", K["sku"])
