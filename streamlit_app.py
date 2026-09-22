@@ -544,7 +544,7 @@ td{{padding:10px;border-bottom:1px solid var(--line);vertical-align:top}}
 <div class="header">
 <h1>{html_lib.escape(title)}</h1>
 <p>{html_lib.escape(subtitle)}</p>
-<div class="meta">Generated {generated} · Supply Chain AI Copilot V1.9.1</div>
+<div class="meta">Generated {generated} · Supply Chain AI Copilot V1.9.3</div>
 </div>
 {body}
 <div class="footer">Decision support only. Validate purchase execution and supplier commitments before release.</div>
@@ -1070,6 +1070,107 @@ def _xlsx_build_complete(a, raw, dq, plan):
     _xlsx_write_df(src_ws, raw, 3, 0, list(raw.columns), wb, "SourceData")
 
     return wb
+
+
+def _excel_change_monitor_bytes(comparison, comparison_meta):
+    if xlsxwriter is None:
+        raise RuntimeError("XlsxWriter is not available. Add XlsxWriter to requirements.txt and redeploy.")
+    if comparison is None or comparison.empty or not comparison_meta.get("has_comparison"):
+        raise ValueError("No comparable periods are available.")
+
+    buf = io.BytesIO()
+    wb = xlsxwriter.Workbook(buf, {"in_memory": True})
+    fmt = _xlsx_base_formats(wb)
+    ws = wb.add_worksheet("Change Monitor")
+
+    _xlsx_title(
+        ws,
+        "Supply Chain AI — Change Monitor",
+        f"{comparison_meta['previous_period']} → {comparison_meta['current_period']} · period-over-period decision changes",
+        wb, 10
+    )
+
+    _xlsx_kpi_block(ws, wb, 3, 0, 3, "Purchase delta",
+                    f"€{comparison_meta['purchase_delta']:,.0f}", "#ECFDF5")
+    _xlsx_kpi_block(ws, wb, 3, 3, 3, "Service risk delta",
+                    f"€{comparison_meta['service_risk_delta']:,.0f}", "#FEF2F2")
+    _xlsx_kpi_block(ws, wb, 3, 6, 3, "Worsened",
+                    str(comparison_meta["worsened"]), "#FEF3C7")
+    _xlsx_kpi_block(ws, wb, 3, 9, 3, "Action changes",
+                    str(comparison_meta["action_changes"]), "#EAF2FF")
+
+    ws.write(6, 0, "Interpretation", wb.add_format({
+        "bold": True, "font_color": "#17365D", "font_size": 12
+    }))
+    ws.merge_range(
+        6, 1, 6, 10,
+        "Focus first on WORSENED and WATCH lines; the table explains the main operational deltas.",
+        wb.add_format({"font_color": "#475569", "text_wrap": True})
+    )
+
+    columns = [
+        "Priority","SKU","Description","Supplier",
+        "Previous_Action","Current_Action","Action_Transition",
+        "Previous_Days_Cover","Current_Days_Cover","Days_Cover_Delta",
+        "Purchase_Value_Delta","Service_Risk_Delta","Excess_Value_Delta",
+        "Sales_Delta_Pct","Change_Classification","Change_Reason"
+    ]
+    cm = comparison.copy()
+    if "Priority" not in cm.columns:
+        cm["Priority"] = np.arange(1, len(cm) + 1)
+    cm = cm[columns].head(30)
+
+    _xlsx_write_df(
+        ws, cm, 8, 0, columns, wb, "ChangeMonitorExport",
+        formats={
+            **fmt,
+            "Purchase_Value_Delta": fmt["currency"],
+            "Service_Risk_Delta": fmt["currency"],
+            "Excess_Value_Delta": fmt["currency"],
+            "Days_Cover_Delta": fmt["number"],
+            "Sales_Delta_Pct": fmt["number"],
+        },
+        widths={
+            "Description": 30,
+            "Action_Transition": 28,
+            "Change_Reason": 42,
+            "Previous_Action": 18,
+            "Current_Action": 18,
+            "Change_Classification": 18,
+        }
+    )
+
+    class_counts = (
+        comparison["Change_Classification"]
+        .value_counts()
+        .reindex(["WORSENED", "WATCH", "IMPROVED", "STABLE"], fill_value=0)
+        .reset_index()
+    )
+    class_counts.columns = ["Classification", "SKUs"]
+    summary_row = 41
+    summary_header = wb.add_format({
+        "bold": True, "font_color": "#FFFFFF",
+        "bg_color": "#17365D", "align": "center"
+    })
+    ws.write_row(summary_row, 0, ["Classification", "SKUs"], summary_header)
+    for i, row in class_counts.iterrows():
+        ws.write(summary_row + 1 + i, 0, row["Classification"])
+        ws.write(summary_row + 1 + i, 1, int(row["SKUs"]))
+
+    chart = wb.add_chart({"type": "column"})
+    chart.add_series({
+        "name": "SKUs",
+        "categories": f"='Change Monitor'!$A${summary_row+2}:$A${summary_row+1+len(class_counts)}",
+        "values": f"='Change Monitor'!$B${summary_row+2}:$B${summary_row+1+len(class_counts)}",
+    })
+    chart.set_title({"name": "Change classification"})
+    chart.set_legend({"none": True})
+    chart.set_style(10)
+    ws.insert_chart("R9", chart, {"x_scale": 1.0, "y_scale": 0.9})
+    ws.freeze_panes(9, 0)
+
+    wb.close()
+    return buf.getvalue()
 
 def _excel_export_bytes(kind, a, raw, dq, plan, comparison=None, comparison_meta=None):
     if xlsxwriter is None:
@@ -1965,7 +2066,7 @@ a["Forecast_Change_Pct"] = np.where(
 # Header
 # -----------------------------
 st.title("📦 Supply Chain AI Copilot")
-st.caption("From raw supply-chain data to prioritized decisions · V1.9.1")
+st.caption("From raw supply-chain data to prioritized decisions · V1.9.3")
 
 c1,c2,c3,c4,c5,c6 = st.columns(6)
 c1.metric("SKUs", K["sku"])
@@ -2281,12 +2382,41 @@ with tabs[8]:
                 use_container_width=True, hide_index=True
             )
 
-        st.download_button(
-            "⬇️ Download change monitor",
-            comparison.to_csv(index=False).encode("utf-8"),
-            "change_monitor.csv",
-            "text/csv"
+        change_report_html = build_change_monitor_html(comparison, comparison_meta)
+
+        st.markdown("### 📤 Export Change Monitor")
+        export_cm1, export_cm2 = st.columns(2)
+
+        with export_cm1:
+            st.download_button(
+                "📊 Download Change Monitor Report (HTML)",
+                change_report_html.encode("utf-8"),
+                "change_monitor_report.html",
+                "text/html",
+                use_container_width=True
+            )
+
+        try:
+            change_report_xlsx = _excel_change_monitor_bytes(comparison, comparison_meta)
+        except Exception as export_exc:
+            change_report_xlsx = None
+            st.warning(f"Excel export unavailable: {export_exc}")
+
+        with export_cm2:
+            if change_report_xlsx:
+                st.download_button(
+                    "📗 Download Change Monitor Report (Excel)",
+                    change_report_xlsx,
+                    "change_monitor_report.xlsx",
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True
+                )
+
+        st.caption(
+            "HTML and Excel contain the same Change Monitor analysis: KPIs, period deltas, "
+            "top changes, classification and reasons."
         )
+
 
 # -----------------------------
 # Copilot
