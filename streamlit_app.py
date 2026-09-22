@@ -1,6 +1,6 @@
 
-import io, os, math
-from datetime import date, timedelta
+import io, os, math, html as html_lib, zipfile
+from datetime import date, timedelta, datetime
 from pathlib import Path
 import pandas as pd
 import numpy as np
@@ -80,24 +80,90 @@ def data_quality_report(df):
     rows = []
     for col in REQUIRED:
         if col not in df.columns:
-            rows.append({"Field": col, "Status": "MISSING", "Issue": "Required field not found"})
+            rows.append({
+                "Category": "Structure", "Check": f"Required field: {col}",
+                "Status": "CRITICAL", "Count": 1,
+                "Details": "Required field not found."
+            })
             continue
         nulls = int(df[col].isna().sum())
         rows.append({
-            "Field": col,
+            "Category": "Completeness", "Check": col,
             "Status": "OK" if nulls == 0 else "WARNING",
-            "Issue": "No missing values" if nulls == 0 else f"{nulls} missing values"
+            "Count": nulls,
+            "Details": "No missing values." if nulls == 0 else f"{nulls} missing values."
         })
 
-    dupes = int(df.duplicated(subset=["SKU","Year","Month"]).sum()) if all(
-        c in df.columns for c in ["SKU","Year","Month"]
-    ) else 0
-    rows.append({
-        "Field": "SKU-Year-Month",
-        "Status": "OK" if dupes == 0 else "WARNING",
-        "Issue": "No duplicate periods" if dupes == 0 else f"{dupes} duplicate rows"
-    })
+    for col in ["Sales","Stock","Open_PO","Lead_Time_Days","MOQ","Unit_Cost"]:
+        if col in df.columns:
+            values = pd.to_numeric(df[col], errors="coerce")
+            bad = int((values < 0).sum())
+            rows.append({
+                "Category": "Validity",
+                "Check": f"Negative values: {col}",
+                "Status": "OK" if bad == 0 else "WARNING",
+                "Count": bad,
+                "Details": "No negative values." if bad == 0 else f"{bad} rows contain negative values."
+            })
+
+    if "Month" in df.columns:
+        month_num = pd.to_numeric(df["Month"], errors="coerce")
+        bad_month = int(((month_num < 1) | (month_num > 12)).sum())
+        rows.append({
+            "Category": "Validity", "Check": "Month range",
+            "Status": "OK" if bad_month == 0 else "CRITICAL",
+            "Count": bad_month,
+            "Details": "Months are 1–12." if bad_month == 0 else f"{bad_month} rows have invalid month values."
+        })
+
+    if all(c in df.columns for c in ["SKU","Year","Month"]):
+        dupes = int(df.duplicated(subset=["SKU","Year","Month"], keep=False).sum())
+        rows.append({
+            "Category": "Uniqueness", "Check": "SKU-Year-Month",
+            "Status": "OK" if dupes == 0 else "WARNING",
+            "Count": dupes,
+            "Details": "No duplicated SKU-period rows." if dupes == 0 else f"{dupes} rows participate in duplicated SKU-period combinations."
+        })
+
+    if "SKU" in df.columns:
+        empty_sku = int(df["SKU"].astype(str).str.strip().eq("").sum())
+        rows.append({
+            "Category": "Completeness", "Check": "Blank SKU",
+            "Status": "OK" if empty_sku == 0 else "CRITICAL",
+            "Count": empty_sku,
+            "Details": "No blank SKUs." if empty_sku == 0 else f"{empty_sku} blank SKU values."
+        })
+
+    if "Supplier" in df.columns:
+        empty_supplier = int(df["Supplier"].astype(str).str.strip().eq("").sum())
+        rows.append({
+            "Category": "Completeness", "Check": "Blank Supplier",
+            "Status": "OK" if empty_supplier == 0 else "WARNING",
+            "Count": empty_supplier,
+            "Details": "No blank suppliers." if empty_supplier == 0 else f"{empty_supplier} blank supplier values."
+        })
+
     return pd.DataFrame(rows)
+
+def data_quality_summary(df, dq):
+    critical = int((dq["Status"] == "CRITICAL").sum())
+    warnings = int((dq["Status"] == "WARNING").sum())
+    ok = int((dq["Status"] == "OK").sum())
+    latest_period = "—"
+    if all(c in df.columns for c in ["Year","Month"]):
+        y = pd.to_numeric(df["Year"], errors="coerce")
+        m = pd.to_numeric(df["Month"], errors="coerce")
+        mask = y.notna() & m.notna()
+        if mask.any():
+            latest_period = f"{int(y[mask].max())}-{int(m[mask].max()):02d}"
+    return {
+        "rows": int(len(df)),
+        "skus": int(df["SKU"].nunique()) if "SKU" in df.columns else 0,
+        "suppliers": int(df["Supplier"].nunique()) if "Supplier" in df.columns else 0,
+        "critical": critical, "warnings": warnings, "ok": ok,
+        "latest_period": latest_period, "checks": int(len(dq))
+    }
+
 
 def build_action_plan(a):
     x = a.sort_values("Decision_Score", ascending=False).copy()
@@ -153,6 +219,158 @@ def supplier_message(row, company=""):
         f"Where applicable, please confirm the quantity of {row['Recommended_Order']:.0f} units.\n\n"
         f"Thank you,\n{company or 'Supply Chain Team'}"
     )
+
+def _html_badge(value):
+    colors = {
+        "🔴 CRITICAL": "#FEE2E2", "🟠 REVIEW": "#FFEDD5",
+        "🟡 EXCESS": "#FEF3C7", "🟢 OK": "#DCFCE7",
+        "BUY_NOW": "#FEE2E2", "CONFIRM_PO": "#DBEAFE",
+        "REVIEW": "#FFEDD5", "DO_NOT_BUY": "#FEF3C7",
+        "MONITOR": "#DCFCE7", "HIGH": "#FEE2E2",
+        "MEDIUM": "#FEF3C7", "LOW": "#E0E7FF",
+        "WARNING": "#FFEDD5", "CRITICAL": "#FEE2E2", "OK": "#DCFCE7"
+    }
+    bg = colors.get(str(value), "#F3F4F6")
+    return f'<span style="background:{bg};padding:4px 8px;border-radius:12px;font-weight:700;">{html_lib.escape(str(value))}</span>'
+
+def _html_table(df, columns, currency_cols=None):
+    currency_cols = set(currency_cols or [])
+    body = []
+    for _, r in df.iterrows():
+        cells = []
+        for c in columns:
+            v = r[c]
+            if c in currency_cols:
+                cell = f"€{float(v):,.0f}" if pd.notna(v) else "—"
+            elif c in {"Status","Action","Decision_Confidence"}:
+                cell = _html_badge(v)
+            elif isinstance(v, (float, np.floating)):
+                cell = f"{float(v):,.1f}"
+            else:
+                cell = html_lib.escape(str(v))
+            cells.append(f"<td>{cell}</td>")
+        body.append("<tr>" + "".join(cells) + "</tr>")
+    return "".join(body)
+
+def build_executive_html(a, raw, dq, plan):
+    generated = datetime.now().strftime("%Y-%m-%d %H:%M")
+    critical = int((a["Status"] == "🔴 CRITICAL").sum())
+    review = int((a["Status"] == "🟠 REVIEW").sum())
+    excess = int((a["Status"] == "🟡 EXCESS").sum())
+    purchase = float(a["Purchase_Value"].sum())
+    inventory = float(a["Inventory_Value"].sum())
+    service_risk = float(a["Service_Risk_Value"].sum())
+    excess_value = float(a["Excess_Inventory_Value"].sum())
+
+    top = a.sort_values("Decision_Score", ascending=False).head(10)
+    supplier = a.groupby("Supplier", as_index=False).agg(
+        Purchase_Value=("Purchase_Value","sum"),
+        Service_Risk=("Service_Risk_Value","sum"),
+        Critical=("Status", lambda s: int((s=="🔴 CRITICAL").sum())),
+        Inventory=("Inventory_Value","sum"),
+    ).sort_values(["Critical","Service_Risk","Purchase_Value"], ascending=[False,False,False]).head(10)
+
+    dq_summary = data_quality_summary(raw, dq)
+
+    html = f"""<!doctype html>
+<html><head><meta charset="utf-8"><title>Supply Chain Executive Report</title>
+<style>
+body{{font-family:Inter,Arial,sans-serif;background:#f4f7fb;color:#172033;margin:0;padding:32px}}
+.container{{max-width:1200px;margin:auto}}
+.header{{background:#132238;color:white;padding:28px 32px;border-radius:16px}}
+h1{{margin:0 0 8px;font-size:30px}} h2{{margin-top:0}}
+.meta{{color:#cbd5e1}}
+.grid{{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin:18px 0}}
+.card{{background:#fff;border-radius:14px;padding:18px;box-shadow:0 3px 14px rgba(15,23,42,.08)}}
+.label{{font-size:12px;color:#64748b;text-transform:uppercase;font-weight:700}}
+.value{{font-size:28px;font-weight:800;margin-top:5px}}
+.section{{background:#fff;padding:22px;margin:18px 0;border-radius:14px}}
+table{{width:100%;border-collapse:collapse;font-size:13px}}
+th{{background:#eef2f7;text-align:left;padding:10px}} td{{padding:9px;border-bottom:1px solid #e5e7eb}}
+.small{{font-size:12px;color:#64748b}}
+</style></head>
+<body><div class="container">
+<div class="header"><h1>📦 Supply Chain AI — Executive Decision Report</h1>
+<div class="meta">Generated {generated} · {dq_summary['skus']} SKUs · {dq_summary['suppliers']} suppliers · latest period {dq_summary['latest_period']}</div></div>
+
+<div class="grid">
+<div class="card"><div class="label">Inventory value</div><div class="value">€{inventory:,.0f}</div></div>
+<div class="card"><div class="label">Purchase requirement</div><div class="value">€{purchase:,.0f}</div></div>
+<div class="card"><div class="label">Service risk</div><div class="value">€{service_risk:,.0f}</div></div>
+<div class="card"><div class="label">Excess inventory</div><div class="value">€{excess_value:,.0f}</div></div>
+</div>
+
+<div class="grid">
+<div class="card"><div class="label">Critical SKUs</div><div class="value">{critical}</div></div>
+<div class="card"><div class="label">Review SKUs</div><div class="value">{review}</div></div>
+<div class="card"><div class="label">Excess SKUs</div><div class="value">{excess}</div></div>
+<div class="card"><div class="label">DQ issues</div><div class="value">{dq_summary['critical'] + dq_summary['warnings']}</div></div>
+</div>
+
+<div class="section"><h2>1. Top priorities</h2>
+<table><thead><tr><th>SKU</th><th>Description</th><th>Supplier</th><th>Status</th><th>Action</th><th>Timing</th><th>Qty</th><th>Purchase</th></tr></thead>
+<tbody>{_html_table(top, ["SKU","Description","Supplier","Status","Action","Action_Timing","Recommended_Order","Purchase_Value"], ["Purchase_Value"])}</tbody></table></div>
+
+<div class="section"><h2>2. Supplier exposure</h2>
+<table><thead><tr><th>Supplier</th><th>Critical</th><th>Service risk</th><th>Purchase</th><th>Inventory</th></tr></thead>
+<tbody>{_html_table(supplier, ["Supplier","Critical","Service_Risk","Purchase_Value","Inventory"], ["Service_Risk","Purchase_Value","Inventory"])}</tbody></table></div>
+
+<div class="section"><h2>3. Weekly action plan</h2>
+<table><thead><tr><th>Priority</th><th>SKU</th><th>Action</th><th>Owner</th><th>Deadline</th><th>Reason</th><th>Confidence</th></tr></thead>
+<tbody>{_html_table(plan.head(15), ["Priority","SKU","Action","Owner","Deadline","Reason","Confidence"])}</tbody></table></div>
+
+<div class="section"><h2>4. Data Quality</h2>
+<p><strong>{dq_summary['ok']}</strong> checks OK · <strong>{dq_summary['warnings']}</strong> warnings · <strong>{dq_summary['critical']}</strong> critical issues.</p>
+<table><thead><tr><th>Category</th><th>Check</th><th>Status</th><th>Count</th><th>Details</th></tr></thead>
+<tbody>{_html_table(dq, ["Category","Check","Status","Count","Details"])}</tbody></table></div>
+
+<div class="section"><h2>5. Decision rules</h2>
+<ul>
+<li><strong>BUY_NOW:</strong> on-hand stock below lead-time demand.</li>
+<li><strong>CONFIRM_PO:</strong> existing PO should be checked before adding a new order.</li>
+<li><strong>DO_NOT_BUY:</strong> coverage materially above the current policy.</li>
+<li><strong>Confidence:</strong> based mainly on demand variability and data availability.</li>
+</ul>
+<p class="small">Decision support only. Purchase execution and supplier commitments require planner/buyer validation.</p>
+</div>
+
+</div></body></html>"""
+    return html
+
+def build_management_pack(a, raw, dq, plan):
+    po = export_purchase(a)
+    supplier = a.groupby("Supplier", as_index=False).agg(
+        SKUs=("SKU","count"),
+        Critical=("Status", lambda s: int((s=="🔴 CRITICAL").sum())),
+        Review=("Status", lambda s: int((s=="🟠 REVIEW").sum())),
+        Purchase_Value=("Purchase_Value","sum"),
+        Inventory_Value=("Inventory_Value","sum"),
+        Service_Risk_Value=("Service_Risk_Value","sum"),
+        Excess_Inventory_Value=("Excess_Inventory_Value","sum")
+    ).sort_values(["Critical","Service_Risk_Value","Purchase_Value"], ascending=[False,False,False])
+
+    report_html = build_executive_html(a, raw, dq, plan)
+    files = {
+        "executive_report.html": report_html.encode("utf-8"),
+        "sku_analysis.csv": a.to_csv(index=False).encode("utf-8"),
+        "action_plan.csv": plan.to_csv(index=False).encode("utf-8"),
+        "purchase_plan.csv": po.to_csv(index=False).encode("utf-8"),
+        "supplier_risk.csv": supplier.to_csv(index=False).encode("utf-8"),
+        "data_quality.csv": dq.to_csv(index=False).encode("utf-8"),
+    }
+
+    messages = []
+    for _, r in a[a["Action"].isin(["BUY_NOW","CONFIRM_PO"])].sort_values("Decision_Score", ascending=False).iterrows():
+        messages.append(supplier_message(r))
+        messages.append("\n" + "="*80 + "\n")
+    files["supplier_messages.txt"] = "".join(messages).encode("utf-8")
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for name, payload in files.items():
+            z.writestr(name, payload)
+    return buf.getvalue(), report_html
+
 
 def validate(df):
     missing = [c for c in REQUIRED if c not in df.columns]
@@ -770,6 +988,8 @@ if not _REQUIRED_ANALYSIS_COLUMNS.issubset(set(a.columns)):
     st.session_state.analysis = a
 
 K = kpis(a)
+dq = data_quality_report(raw)
+plan = build_action_plan(a)
 
 # Add/refresh forecast change vs historical monthly average
 a["Forecast_Change_Pct"] = np.where(
@@ -782,7 +1002,7 @@ a["Forecast_Change_Pct"] = np.where(
 # Header
 # -----------------------------
 st.title("📦 Supply Chain AI Copilot")
-st.caption("From raw supply-chain data to prioritized decisions · V1.5.1")
+st.caption("From raw supply-chain data to prioritized decisions · V1.6")
 
 c1,c2,c3,c4,c5,c6 = st.columns(6)
 c1.metric("SKUs", K["sku"])
@@ -939,52 +1159,109 @@ with tabs[5]:
 # -----------------------------
 # Data Quality
 # -----------------------------
-with tabs[8]:
-    st.subheader("🧹 Data quality")
-    st.caption("The Copilot should not make decisions from bad master or transaction data.")
-    dq = data_quality_report(raw)
-    st.dataframe(dq, use_container_width=True, hide_index=True)
+with tabs[6]:
+    st.subheader("🧹 Data Quality")
+    st.caption("Checks the data before operational decisions are used.")
 
-    issues = dq[dq["Status"] != "OK"]
-    if issues.empty:
-        st.success("✅ No structural data-quality issues detected.")
+    dq_summary = data_quality_summary(raw, dq)
+    q1, q2, q3, q4, q5 = st.columns(5)
+    q1.metric("Rows", dq_summary["rows"])
+    q2.metric("SKUs", dq_summary["skus"])
+    q3.metric("Suppliers", dq_summary["suppliers"])
+    q4.metric("Warnings", dq_summary["warnings"])
+    q5.metric("Critical", dq_summary["critical"])
+
+    if dq_summary["critical"] > 0:
+        st.error("⛔ Critical data-quality issues detected.")
+    elif dq_summary["warnings"] > 0:
+        st.warning("⚠️ Data-quality warnings detected. Review them before issuing purchase decisions.")
     else:
-        st.warning(f"Detected {len(issues)} data-quality warning(s). Resolve them before using recommendations operationally.")
+        st.success("✅ All current data-quality checks passed.")
+
+    c1, c2 = st.columns([1, 2])
+    with c1:
+        st.metric("Latest period", dq_summary["latest_period"])
+        st.metric("Checks completed", dq_summary["checks"])
+    with c2:
+        st.dataframe(
+            dq[["Category","Check","Status","Count","Details"]],
+            use_container_width=True, hide_index=True
+        )
+
+    st.download_button(
+        "⬇️ Download data-quality report",
+        dq.to_csv(index=False).encode("utf-8"),
+        "data_quality_report.csv",
+        "text/csv",
+        use_container_width=True
+    )
 
 # -----------------------------
 # Action Plan
 # -----------------------------
-with tabs[9]:
-    st.subheader("📝 Weekly action plan")
-    st.caption("Operational worklist created from the Decision Engine.")
-    plan = build_action_plan(a)
+with tabs[7]:
+    st.subheader("📝 Weekly Action Plan")
+    st.caption("Planner-ready worklist generated by the Decision Engine.")
+
+    f1, f2, f3 = st.columns(3)
+    with f1:
+        action_filter = st.multiselect(
+            "Action",
+            ["BUY_NOW","CONFIRM_PO","REVIEW","DO_NOT_BUY","MONITOR"],
+            default=["BUY_NOW","CONFIRM_PO","REVIEW","DO_NOT_BUY"]
+        )
+    with f2:
+        owner_filter = st.multiselect(
+            "Owner",
+            sorted(plan["Owner"].unique().tolist()),
+            default=sorted(plan["Owner"].unique().tolist())
+        )
+    with f3:
+        deadline_filter = st.multiselect(
+            "Deadline",
+            sorted(plan["Deadline"].unique().tolist()),
+            default=sorted(plan["Deadline"].unique().tolist())
+        )
+
+    plan_view = plan.copy()
+    action_map = a.set_index("SKU")["Action"].to_dict()
+    plan_view["Action_Code"] = plan_view["SKU"].map(action_map)
+    plan_view = plan_view[
+        plan_view["Action_Code"].isin(action_filter)
+        & plan_view["Owner"].isin(owner_filter)
+        & plan_view["Deadline"].isin(deadline_filter)
+    ]
+
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Actions", len(plan_view))
+    m2.metric("Immediate", int(plan_view["Deadline"].eq("Today").sum()))
+    m3.metric("Purchase value", f"€{plan_view['Purchase_Value'].sum():,.0f}")
+
     st.dataframe(
-        plan[[
-            "Priority","SKU","Description","Supplier","Action",
-            "Owner","Deadline","Reason","Confidence","Purchase_Value"
-        ]],
-        use_container_width=True,
-        hide_index=True
+        plan_view.drop(columns=["Action_Code"]),
+        use_container_width=True, hide_index=True
     )
 
+    st.subheader("Supplier follow-up")
+    supplier_skus = plan_view[plan_view["Action_Code"].isin(["BUY_NOW","CONFIRM_PO"])]["SKU"].astype(str).tolist()
     selected_sku = st.selectbox(
-        "Generate supplier communication for SKU",
-        options=[""] + list(a["SKU"].astype(str))
+        "Generate supplier communication",
+        options=[""] + supplier_skus
     )
     if selected_sku:
         row = a[a["SKU"].astype(str) == selected_sku].iloc[0]
-        st.code(supplier_message(row), language="text")
-
+        message = supplier_message(row)
+        st.code(message, language="text")
         st.download_button(
             "⬇️ Download supplier message",
-            supplier_message(row).encode("utf-8"),
+            message.encode("utf-8"),
             f"supplier_message_{selected_sku}.txt",
             "text/plain"
         )
 
     st.download_button(
-        "⬇️ Download action plan",
-        plan.to_csv(index=False).encode("utf-8"),
+        "⬇️ Download filtered action plan",
+        plan_view.drop(columns=["Action_Code"]).to_csv(index=False).encode("utf-8"),
         "weekly_action_plan.csv",
         "text/csv"
     )
@@ -1034,32 +1311,64 @@ with tabs[8]:
 # Export
 # -----------------------------
 with tabs[9]:
-    st.subheader("📤 Export")
+    st.subheader("📤 Management Reporting")
+    st.caption("Management-ready reports, not just raw data exports.")
+
+    report_zip, report_html = build_management_pack(a, raw, dq, plan)
+
+    r1, r2, r3, r4 = st.columns(4)
+    r1.metric("Purchase need", f"€{a['Purchase_Value'].sum():,.0f}")
+    r2.metric("Service risk", f"€{a['Service_Risk_Value'].sum():,.0f}")
+    r3.metric("Excess exposure", f"€{a['Excess_Inventory_Value'].sum():,.0f}")
+    r4.metric("Actions", len(plan))
+
+    st.markdown("### 1. Executive Report")
     st.download_button(
-        "Download full analysis",
-        a.to_csv(index=False).encode("utf-8"),
-        "supply_chain_analysis.csv",
-        "text/csv",
+        "📊 Download Executive Report (HTML)",
+        report_html.encode("utf-8"),
+        "supply_chain_executive_report.html",
+        "text/html",
         use_container_width=True
     )
-    po = export_purchase(a)
-    if not po.empty:
+    st.caption("A readable management report with KPIs, priorities, supplier exposure, action plan and data quality.")
+
+    st.markdown("### 2. Complete Management Pack")
+    st.download_button(
+        "📦 Download Management Pack (ZIP)",
+        report_zip,
+        "supply_chain_management_pack.zip",
+        "application/zip",
+        use_container_width=True
+    )
+    st.caption("Includes executive report, SKU analysis, action plan, purchase plan, supplier risk, data quality and supplier messages.")
+
+    st.markdown("### 3. Individual exports")
+    e1, e2, e3 = st.columns(3)
+    with e1:
         st.download_button(
-            "Download purchase plan",
-            po.to_csv(index=False).encode("utf-8"),
+            "⬇️ SKU analysis",
+            a.to_csv(index=False).encode("utf-8"),
+            "sku_analysis.csv",
+            "text/csv",
+            use_container_width=True
+        )
+    with e2:
+        st.download_button(
+            "⬇️ Purchase plan",
+            export_purchase(a).to_csv(index=False).encode("utf-8"),
             "purchase_plan.csv",
             "text/csv",
             use_container_width=True
         )
+    with e3:
+        st.download_button(
+            "⬇️ Action plan",
+            plan.to_csv(index=False).encode("utf-8"),
+            "action_plan.csv",
+            "text/csv",
+            use_container_width=True
+        )
 
-    report = decision_text(a)
-    st.download_button(
-        "Download weekly decision brief",
-        report.encode("utf-8"),
-        "weekly_decision_brief.md",
-        "text/markdown",
-        use_container_width=True
-    )
 
 st.divider()
-st.caption("Supply Chain AI Copilot V1.0 — recommendations require planner validation before execution.")
+st.caption("Supply Chain AI Copilot V1.6 — recommendations require planner validation before execution.")
