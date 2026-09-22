@@ -665,7 +665,7 @@ td{{padding:10px;border-bottom:1px solid var(--line);vertical-align:top}}
 <div class="header">
 <h1>{html_lib.escape(title)}</h1>
 <p>{html_lib.escape(subtitle)}</p>
-<div class="meta">Generated {generated} · Supply Chain AI Copilot V2.0.7</div>
+<div class="meta">Generated {generated} · Supply Chain AI Copilot V2.0.8</div>
 </div>
 {body}
 <div class="footer">Decision support only. Validate purchase execution and supplier commitments before release.</div>
@@ -2348,6 +2348,136 @@ if "chat" not in st.session_state:
 if "copilot_prefill" not in st.session_state:
     st.session_state.copilot_prefill = ""
 
+
+# -----------------------------
+# Internationalization (EN / ES)
+# -----------------------------
+if "language" not in st.session_state:
+    st.session_state.language = "English"
+
+_TRANSLATIONS = {
+    "Spanish": {
+        "Decision Intelligence for planners · V2.0.8": "Inteligencia de decisiones para planners · V2.0.8",
+        "Historical demand and inventory": "Histórico de demanda e inventario",
+        "Upload historical demand and inventory data for analysis. CSV and Excel are supported.": "Carga datos históricos de demanda e inventario para ejecutar el análisis. Se admiten CSV y Excel.",
+        "Safety stock floor (days)": "Stock de seguridad mínimo (días)",
+        "Service level": "Nivel de servicio",
+        "Model": "Modelo",
+        "Current models available in the Responses API.": "Modelos actuales disponibles en la Responses API.",
+        "Test another key for this session only": "Probar otra clave solo durante esta sesión",
+        "Diagnose OpenAI connection": "Diagnosticar conexión con OpenAI",
+        "Load demo": "Cargar demo",
+        "Current dataset": "Dataset actual",
+        "Period": "Periodo",
+        "No critical SKUs under the current planning parameters.": "No hay SKUs críticos con los parámetros actuales de planificación.",
+        "Safety stock floor": "Stock de seguridad mínimo",
+        "Service level target": "Objetivo de nivel de servicio",
+        "These parameters affect safety stock, coverage and purchase recommendations.": "Estos parámetros afectan al stock de seguridad, la cobertura y las recomendaciones de compra.",
+        "Current period": "Periodo actual",
+        "Compare with": "Comparar con",
+        "What should the planner do now?": "¿Qué debería hacer ahora el planner?",
+        "Why these actions?": "¿Por qué estas acciones?",
+        "Purchase plan by supplier": "Plan de compras por proveedor",
+        "No purchase orders recommended.": "No se recomiendan órdenes de compra.",
+        "Continue with Copilot": "Continuar con Copilot",
+        "Prepared question for Copilot. Go to the 🤖 Copilot tab to run it.": "Pregunta preparada para Copilot. Ve a la pestaña 🤖 Copilot para ejecutarla.",
+        "Critical inventory exposure": "Exposición de inventario crítico",
+        "Excess inventory": "Exceso de inventario",
+        "Immediate actions": "Acciones inmediatas",
+        "Purchase need": "Necesidad de compra",
+        "Inventory": "Inventario",
+        "Next month": "Próximo mes",
+        "Logistics KPI Dashboard": "Dashboard de KPIs logísticos",
+        "Executive view of inventory, service exposure, replenishment, supplier exposure and logistics efficiency.": "Vista ejecutiva de inventario, exposición de servicio, reposición, exposición por proveedor y eficiencia logística.",
+        "Sales value vs inventory value": "Valor de ventas vs valor de inventario",
+        "No monthly history available for the trend chart.": "No hay histórico mensual disponible para el gráfico de tendencia.",
+        "Inventory health": "Salud del inventario",
+        "Supplier exposure": "Exposición por proveedor",
+        "Lead-time profile": "Perfil de lead time",
+        "ABC / XYZ portfolio": "Cartera ABC / XYZ",
+        "Logistics KPI catalogue": "Catálogo de KPIs logísticos",
+        "What the dashboard is telling the planner": "Qué está indicando el dashboard al planner",
+        "Investigate with Copilot": "Investigar con Copilot",
+        "Service and coverage KPIs are planning proxies derived from inventory, demand and lead-time data; they are not OTIF or customer fill-rate measurements unless those source fields are provided.": "Los KPIs de servicio y cobertura son indicadores de planificación derivados de inventario, demanda y lead time; no son mediciones OTIF ni fill rate de cliente salvo que esos campos estén disponibles en los datos fuente.",
+        "Planning Agent": "Agente de planificación",
+        "Turns the decision engine into an ordered sequence of planner actions.": "Convierte el motor de decisiones en una secuencia ordenada de acciones para el planner.",
+        "Recommended execution sequence": "Secuencia de ejecución recomendada",
+        "Planner rationale": "Justificación para el planner",
+        "Export Planning Agent": "Exportar Planning Agent",
+        "Demand outlook": "Perspectiva de demanda",
+        "Segmentation": "Segmentación",
+        "Policy simulator": "Simulador de políticas",
+        "Simulate decisions before changing the policy.": "Simula decisiones antes de cambiar la política.",
+        "Lead time multiplier": "Multiplicador de lead time",
+        "Data Quality": "Calidad de datos",
+        "Checks the data before operational decisions are used.": "Comprueba los datos antes de utilizar decisiones operativas.",
+        "Critical data-quality issues detected.": "Se han detectado problemas críticos de calidad de datos.",
+        "Data-quality warnings detected. Review them before issuing purchase decisions.": "Se han detectado avisos de calidad de datos. Revísalos antes de emitir decisiones de compra.",
+        "All current data-quality checks passed.": "Todas las comprobaciones actuales de calidad de datos han sido superadas.",
+        "Latest period": "Último periodo",
+        "Checks completed": "Comprobaciones realizadas",
+        "Export Data Quality": "Exportar calidad de datos",
+        "HTML provides the management-ready visual report; Excel provides editable quality checks and KPI summary.": "HTML proporciona el informe visual preparado para dirección; Excel proporciona comprobaciones editables y resumen de KPIs.",
+        "Weekly Action Plan": "Plan de acción semanal",
+        "Planner-ready worklist generated by the Decision Engine.": "Lista de trabajo preparada para el planner y generada por el motor de decisiones.",
+        "Supplier follow-up": "Seguimiento de proveedores",
+        "Export Action Plan": "Exportar plan de acción",
+        "What changed?": "¿Qué ha cambiado?",
+        "Need at least two historical periods to compare evolution.": "Se necesitan al menos dos periodos históricos para comparar la evolución.",
+        "API key detected ·": "API key detectada ·",
+        "No OPENAI_API_KEY configured. Local mode will be used.": "No hay OPENAI_API_KEY configurada. Se utilizará el modo local.",
+        "Manual API key": "API key manual",
+        "critical SKUs require attention.": "SKUs críticos requieren atención.",
+        "Planning assumptions": "Parámetros de planificación",
+    }
+}
+
+def tr(text):
+    if text is None:
+        return text
+    if st.session_state.get("language", "English") == "Spanish":
+        return _TRANSLATIONS["Spanish"].get(str(text), str(text))
+    return str(text)
+
+# Display labels for dataframes. Calculations always keep the canonical English field names.
+_COLUMN_TRANSLATIONS_ES = {
+    "SKU":"SKU", "Description":"Descripción", "Supplier":"Proveedor", "Status":"Estado",
+    "Action":"Acción", "Action_Timing":"Momento de acción", "Decision_Confidence":"Confianza de decisión",
+    "Days_Cover":"Días de cobertura", "Lead_Time_Days":"Lead time (días)", "Recommended_Order":"Pedido recomendado",
+    "Purchase_Value":"Valor de compra", "Decision_Score":"Puntuación de decisión", "Inventory_Value":"Valor de inventario",
+    "Safety_Stock":"Stock de seguridad", "ABC_XYZ":"ABC/XYZ", "Annual_Sales":"Ventas anuales",
+    "Avg_Monthly_Demand":"Demanda mensual media", "Forecast_Next_Month":"Forecast próximo mes",
+    "Forecast_Change_Pct":"Cambio forecast %", "Trend_Units_Per_Month":"Tendencia unidades/mes", "Demand_CV":"CV de demanda",
+    "Annual_Consumption_Value":"Valor consumo anual", "ABC":"ABC", "XYZ":"XYZ", "SKUs":"SKUs",
+    "Critical":"Críticos", "Avg_Cover":"Cobertura media", "Purchase_Value":"Valor de compra",
+    "Priority":"Prioridad", "Owner":"Responsable", "Deadline":"Fecha límite", "Reason":"Motivo",
+    "Confidence":"Confianza", "Purchase":"Compra", "Previous_Action":"Acción anterior", "Current_Action":"Acción actual",
+    "Action_Transition":"Transición de acción", "Previous_Days_Cover":"Cobertura anterior", "Current_Days_Cover":"Cobertura actual",
+    "Days_Cover_Delta":"Delta cobertura", "Purchase_Value_Delta":"Delta valor compra", "Service_Risk_Delta":"Delta riesgo servicio",
+    "Excess_Value_Delta":"Delta exceso", "Sales_Delta_Pct":"Delta ventas %", "Change_Classification":"Clasificación del cambio",
+    "Change_Reason":"Motivo del cambio", "Category":"Categoría", "Check":"Comprobación", "Count":"Cantidad",
+    "Details":"Detalles", "Status":"Estado", "Year":"Año", "Month":"Mes", "Sales":"Ventas", "Stock":"Stock",
+    "Open_PO":"Pedidos abiertos", "MOQ":"MOQ", "Unit_Cost":"Coste unitario", "Inventory_Value":"Valor inventario",
+}
+
+def localize_df(df):
+    if st.session_state.get("language", "English") != "Spanish" or df is None:
+        return df
+    out = df.copy()
+    out.columns = [_COLUMN_TRANSLATIONS_ES.get(str(c), str(c)) for c in out.columns]
+    return out
+
+# Keep calculations in canonical English while presenting tables and common controls in the selected language.
+_original_st_dataframe = st.dataframe
+def _localized_dataframe(data, *args, **kwargs):
+    return _original_st_dataframe(localize_df(data), *args, **kwargs)
+st.dataframe = _localized_dataframe
+
+_original_st_metric = st.metric
+def _localized_metric(label, *args, **kwargs):
+    return _original_st_metric(tr(label), *args, **kwargs)
+st.metric = _localized_metric
+
 # -----------------------------
 # User-friendly UI layer
 # -----------------------------
@@ -2378,28 +2508,20 @@ div[data-testid="stExpander"] { border-radius: 12px; }
 # -----------------------------
 with st.sidebar:
     st.markdown("## 📦 Supply Chain AI")
-    st.caption("Decision Intelligence for planners · V2.0.7")
+    st.caption(tr("Decision Intelligence for planners · V2.0.8"))
 
-    with st.expander("🧭 How to use the Copilot", expanded=True):
-        st.markdown("""
-**Recommended workflow**
-
-1. **📊 Dashboard** → understand the overall situation.  
-2. **🎯 Decision Center** → identify what needs action now.  
-3. **🧠 Planning Agent** → follow the recommended execution sequence.  
-4. **🤖 Copilot** → ask why, explore alternatives and investigate exceptions.  
-5. **📤 Export** → share the management-ready reports.
-        """)
+    language_choice = st.selectbox("🌐 Language / Idioma", ["English", "Español"], index=0 if st.session_state.language == "English" else 1, key="language_selector")
+    st.session_state.language = "English" if language_choice == "English" else "Spanish"
 
     uploaded = st.file_uploader(
-        "Histórico de demanda e inventario",
+        tr("Historical demand and inventory"),
         type=["csv", "xlsx", "xls"],
         key="historical_demand_inventory_uploader",
-        help="Carga un histórico de demanda e inventario para ejecutar el análisis. Puedes usar CSV o Excel."
+        help=tr("Upload historical demand and inventory data for analysis. CSV and Excel are supported.")
     )
-    safety_days = st.slider("Safety stock floor (días)", 0, 90, 10)
-    service = st.select_slider("Service level", options=[0.90,0.95,0.975,0.99], value=0.95)
-    st.subheader("🤖 OpenAI")
+    safety_days = st.slider(tr("Safety stock floor (days)"), 0, 90, 10)
+    service = st.select_slider(tr("Service level"), options=[0.90,0.95,0.975,0.99], value=0.95)
+    st.subheader(tr("🤖 OpenAI"))
 
     secret_key = ""
     try:
@@ -2416,36 +2538,36 @@ with st.sidebar:
     )
 
     model = st.selectbox(
-        "Modelo",
+        tr("Model"),
         ["gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol"],
         index=0,
-        help="Modelos actuales disponibles en la Responses API."
+        help=tr("Current models available in the Responses API.")
     )
 
 
     if stored_key:
         prefix = stored_key[:8] if len(stored_key) >= 8 else stored_key
         suffix = stored_key[-4:] if len(stored_key) >= 4 else ""
-        st.success(f"API key detectada · {source}")
+        st.success(tr(f"API key detected · {source}"))
         st.caption(f"Fingerprint: `{prefix}…{suffix}`")
     else:
-        st.warning("No hay OPENAI_API_KEY configurada. Se usará el modo local.")
+        st.warning(tr("No OPENAI_API_KEY configured. Local mode will be used."))
 
     use_manual = st.checkbox(
-        "Probar otra clave solo en esta sesión",
+        tr("Test another key for this session only"),
         value=False
     )
 
     manual_key = ""
     if use_manual:
         manual_key = st.text_input(
-            "API key manual",
+            tr("Manual API key"),
             type="password"
         ).strip()
 
     effective_key = manual_key if use_manual and manual_key else stored_key
 
-    if st.button("🔌 Diagnosticar conexión OpenAI", use_container_width=True):
+    if st.button(tr("🔌 Diagnose OpenAI connection"), use_container_width=True):
         ok, message, details = test_openai_connection(effective_key, model)
 
         if ok:
@@ -2468,7 +2590,7 @@ with st.sidebar:
         "La API key nunca se muestra completa ni se guarda en GitHub."
     )
 
-    if st.button("🔄 Cargar demo"):
+    if st.button(tr("🔄 Load demo")):
         st.session_state.raw_data = sample_data()
         st.session_state.analysis = analyze(st.session_state.raw_data, safety_days, service)
         st.session_state.chat = []
@@ -2494,7 +2616,7 @@ def _excel_tab_export_bytes(title, sheets, kpis=None):
         summary = wb.add_worksheet("Summary")
         summary.hide_gridlines(2)
         summary.write(0, 0, title, title_fmt)
-        summary.write(1, 0, "Exported from Supply Chain AI Copilot V2.0.7", subtitle_fmt)
+        summary.write(1, 0, "Exported from Supply Chain AI Copilot V2.0.8", subtitle_fmt)
         if kpis:
             summary.write(3, 0, "Key metrics", header_fmt)
             for i, (label, value) in enumerate(kpis.items(), start=4):
@@ -2605,24 +2727,24 @@ else:
 # Comparison controls
 # -----------------------------
 with st.sidebar:
-    st.markdown("### 📁 Current dataset")
+    st.markdown(f"### 📁 {tr('Current dataset')}")
     st.caption(f"{len(raw):,} rows · {a['SKU'].nunique():,} SKUs · {a['Supplier'].nunique():,} suppliers")
     if available_periods:
-        st.caption(f"Period: **{available_periods[0]} → {available_periods[-1]}**")
+        st.caption(f"{tr('Period')}: **{available_periods[0]} → {available_periods[-1]}**")
     if K["critical"] > 0:
-        st.warning(f"{K['critical']:,} critical SKUs require attention.")
+        st.warning(f"{K['critical']:,} {tr('critical SKUs require attention.')}")
     else:
-        st.success("No critical SKUs under the current planning parameters.")
+        st.success(tr("No critical SKUs under the current planning parameters."))
 
-    with st.expander("⚙️ Planning assumptions"):
-        st.caption(f"Safety stock floor: **{safety_days} days**")
-        st.caption(f"Service level target: **{service:.1%}**")
-        st.caption("These parameters affect safety stock, coverage and purchase recommendations.")
+    with st.expander("⚙️ Planning assumptions" if st.session_state.language == "English" else "⚙️ Parámetros de planificación"):
+        st.caption(f"{tr('Safety stock floor')}: **{safety_days} days**")
+        st.caption(f"{tr('Service level target')}: **{service:.1%}**")
+        st.caption(tr("These parameters affect safety stock, coverage and purchase recommendations."))
 
     if len(available_periods) >= 2:
-        with st.expander("🔄 Comparación de periodos", expanded=False):
+        with st.expander("🔄 Period comparison" if st.session_state.language == "English" else "🔄 Comparación de periodos", expanded=False):
             selected_current = st.selectbox(
-                "Periodo actual",
+                tr("Current period"),
                 available_periods,
                 index=available_periods.index(default_current),
                 key="change_current_period"
@@ -2630,12 +2752,12 @@ with st.sidebar:
             current_idx = available_periods.index(selected_current)
             prev_options = available_periods[:current_idx] or [available_periods[0]]
             selected_previous = st.selectbox(
-                "Comparar con",
+                tr("Compare with"),
                 prev_options,
                 index=prev_options.index(default_previous) if default_previous in prev_options else len(prev_options)-1,
                 key="change_previous_period"
             )
-            st.caption(f"Actual: {selected_current} · Anterior: {selected_previous}")
+            st.caption(f"Current: {selected_current} · Previous: {selected_previous}" if st.session_state.language == "English" else f"Actual: {selected_current} · Anterior: {selected_previous}")
 
 # Add/refresh forecast change vs historical monthly average
 a["Forecast_Change_Pct"] = np.where(
@@ -2648,7 +2770,7 @@ a["Forecast_Change_Pct"] = np.where(
 # Header
 # -----------------------------
 st.title("📦 Supply Chain AI Copilot")
-st.caption("From raw supply-chain data to prioritized decisions · V2.0.7")
+st.caption("From raw supply-chain data to prioritized decisions · V2.0.8" if st.session_state.language == "English" else "De datos brutos de supply chain a decisiones priorizadas · V2.0.8")
 
 c1,c2,c3,c4,c5,c6 = st.columns(6)
 c1.metric("SKUs", K["sku"])
@@ -2658,26 +2780,29 @@ c4.metric("🛒 Purchase need", f"€{K['purchase']:,.0f}")
 c5.metric("💰 Inventory", f"€{K['inventory']:,.0f}")
 c6.metric("📈 Next month", f"{K['forecast']:,.0f}")
 
-st.markdown("""
-<div class="sc-workflow">
-<span class="sc-step">1️⃣ Understand</span> <span class="sc-muted">Dashboard</span>
-→ <span class="sc-step">2️⃣ Prioritize</span> <span class="sc-muted">Decision Center</span>
-→ <span class="sc-step">3️⃣ Execute</span> <span class="sc-muted">Planning Agent</span>
-→ <span class="sc-step">4️⃣ Investigate</span> <span class="sc-muted">Copilot</span>
-</div>
-""", unsafe_allow_html=True)
+
 
 tabs = st.tabs([
-    "🎯 Decision Center","📊 Logistics Dashboard","🧠 Planning Agent","📊 Inventory","📈 Forecast",
-    "🧩 ABC/XYZ","🚚 Suppliers","🧪 Scenarios","🧹 Data Quality",
-    "📝 Action Plan","🔄 Change Monitor","🤖 Copilot","📤 Export"
+    "🎯 Decision Center" if st.session_state.language == "English" else "🎯 Centro de decisiones",
+    "📊 Logistics Dashboard" if st.session_state.language == "English" else "📊 Dashboard logístico",
+    "🧠 Planning Agent" if st.session_state.language == "English" else "🧠 Agente de planificación",
+    "📊 Inventory" if st.session_state.language == "English" else "📊 Inventario",
+    "📈 Forecast",
+    "🧩 ABC/XYZ",
+    "🚚 Suppliers" if st.session_state.language == "English" else "🚚 Proveedores",
+    "🧪 Scenarios" if st.session_state.language == "English" else "🧪 Escenarios",
+    "🧹 Data Quality" if st.session_state.language == "English" else "🧹 Calidad de datos",
+    "📝 Action Plan" if st.session_state.language == "English" else "📝 Plan de acción",
+    "🔄 Change Monitor" if st.session_state.language == "English" else "🔄 Monitor de cambios",
+    "🤖 Copilot",
+    "📤 Export" if st.session_state.language == "English" else "📤 Exportar"
 ])
 
 # -----------------------------
 # Decision Center
 # -----------------------------
 with tabs[0]:
-    st.subheader("What should the planner do now?")
+    st.subheader(tr("What should the planner do now?"))
     st.markdown(decision_text(a))
     st.divider()
 
@@ -2698,7 +2823,7 @@ with tabs[0]:
     m2.metric("Excess inventory", f"€{excess_value:,.0f}")
     m3.metric("Immediate actions", int((a["Action"].isin(["BUY_NOW","CONFIRM_PO"])).sum()))
 
-    st.subheader("Why these actions?")
+    st.subheader(tr("Why these actions?"))
     st.info(
         "The engine treats a SKU as BUY_NOW when on-hand stock is below lead-time demand. "
         "REVIEW/CONFIRM_PO cases are handled separately to avoid double ordering when an open PO already exists. "
@@ -2716,14 +2841,14 @@ with tabs[0]:
     top_supplier = supplier_tool["rows"][0]["Supplier"] if supplier_tool["rows"] else "—"
     c4.metric("Top supplier risk", str(top_supplier))
 
-    st.subheader("Purchase plan by supplier")
+    st.subheader(tr("Purchase plan by supplier"))
     po = export_purchase(a)
     if po.empty:
-        st.success("No purchase orders recommended.")
+        st.success(tr("No purchase orders recommended."))
     else:
         st.dataframe(po, use_container_width=True, hide_index=True)
 
-    st.markdown("#### 🤖 Continue with Copilot")
+    st.markdown(f"#### 🤖 {tr('Continue with Copilot')}")
     dcq1, dcq2, dcq3 = st.columns(3)
     if dcq1.button("🔴 Explain critical SKUs", use_container_width=True, key="dc_critical_copilot"):
         st.session_state.copilot_prefill = "Explica los 5 SKUs críticos más importantes, qué está provocando el riesgo y qué acción debería revisar primero."
@@ -2732,7 +2857,7 @@ with tabs[0]:
     if dcq3.button("⚠️ Explain service risk", use_container_width=True, key="dc_service_copilot"):
         st.session_state.copilot_prefill = "Explica dónde está concentrado el service risk y qué acciones podrían reducirlo sin generar compras innecesarias."
     if st.session_state.get("copilot_prefill"):
-        st.info("Pregunta preparada para Copilot. Ve a la pestaña 🤖 Copilot para ejecutarla.")
+        st.info(tr("Prepared question for Copilot. Go to the 🤖 Copilot tab to run it."))
 
     decision_export = _excel_tab_export_bytes(
         "Decision Center",
@@ -2763,8 +2888,8 @@ with tabs[0]:
 # Logistics Dashboard
 # -----------------------------
 with tabs[1]:
-    st.subheader("📊 Logistics KPI Dashboard")
-    st.caption("Executive view of inventory, service exposure, replenishment, supplier exposure and logistics efficiency.")
+    st.subheader(f"📊 {tr('Logistics KPI Dashboard')}")
+    st.caption(tr("Executive view of inventory, service exposure, replenishment, supplier exposure and logistics efficiency."))
     d = logistics_dashboard
     m = d["meta"]
 
@@ -2791,32 +2916,32 @@ with tabs[1]:
 
     c1, c2 = st.columns(2)
     with c1:
-        st.markdown("#### 📈 Sales value vs inventory value")
+        st.markdown(f"#### 📈 {tr('Sales value vs inventory value')}")
         if not d["trend"].empty:
             trend_chart = d["trend"].set_index("Period")[["Sales_Value", "Inventory_Value"]]
             st.line_chart(trend_chart, use_container_width=True)
         else:
-            st.info("No monthly history available for the trend chart.")
+            st.info(tr("No monthly history available for the trend chart."))
     with c2:
-        st.markdown("#### 📦 Inventory health")
+        st.markdown(f"#### 📦 {tr(tr("Inventory health"))}")
         status_chart = d["status"].set_index("Status")[["SKUs"]]
         st.bar_chart(status_chart, use_container_width=True)
 
     c3, c4 = st.columns(2)
     with c3:
-        st.markdown("#### 🚚 Supplier exposure")
+        st.markdown(f"#### 🚚 {tr(tr("Supplier exposure"))}")
         supplier_chart = d["supplier"].head(10).set_index("Supplier")[["Inventory_Value", "Service_Risk_Value", "Purchase_Value"]]
         st.bar_chart(supplier_chart, use_container_width=True)
     with c4:
-        st.markdown("#### ⏱️ Lead-time profile")
+        st.markdown(f"#### ⏱️ {tr('Lead-time profile')}")
         lead_chart = d["lead_bins"].set_index("Lead_Time_Bucket")[["SKUs"]]
         st.bar_chart(lead_chart, use_container_width=True)
 
-    st.markdown("#### 🧩 ABC / XYZ portfolio")
+    st.markdown(f"#### 🧩 {tr('ABC / XYZ portfolio')}")
     abc_display = d["abc_xyz"].set_index("ABC_Class")
     st.dataframe(abc_display, use_container_width=True)
 
-    st.markdown("#### 📋 Logistics KPI catalogue")
+    st.markdown(f"#### 📋 {tr('Logistics KPI catalogue')}")
     kpi_display = d["kpis"].copy()
     kpi_display["Value"] = kpi_display.apply(
         lambda row: (
@@ -2829,7 +2954,7 @@ with tabs[1]:
     )
     st.dataframe(kpi_display, use_container_width=True, hide_index=True)
 
-    st.markdown("#### 🔎 What the dashboard is telling the planner")
+    st.markdown(f"#### 🔎 {tr('What the dashboard is telling the planner')}")
     insights = []
     if m["lead_time_coverage_pct"] < 90:
         insights.append(f"**Service exposure:** only {m['lead_time_coverage_pct']:.1f}% of SKUs currently cover lead-time demand.")
@@ -2846,7 +2971,7 @@ with tabs[1]:
     for insight in insights:
         st.info(insight)
 
-    st.markdown("#### 🤖 Investigate with Copilot")
+    st.markdown(f"#### 🤖 {tr('Investigate with Copilot')}")
     kq1, kq2, kq3 = st.columns(3)
     if kq1.button("📊 Explain KPI health", use_container_width=True, key="kpi_health_copilot"):
         st.session_state.copilot_prefill = "Analiza la salud de los principales KPI logísticos, identifica las señales que requieren atención y explica sus causas."
@@ -2855,7 +2980,7 @@ with tabs[1]:
     if kq3.button("💰 Working capital", use_container_width=True, key="kpi_wc_copilot"):
         st.session_state.copilot_prefill = "Analiza inventario, exceso, cobertura y compras recomendadas desde la perspectiva de working capital."
     if st.session_state.get("copilot_prefill"):
-        st.info("Pregunta preparada para Copilot. Ve a la pestaña 🤖 Copilot para ejecutarla.")
+        st.info(tr("Prepared question for Copilot. Go to the 🤖 Copilot tab to run it."))
 
     dashboard_export = _excel_tab_export_bytes(
         "Logistics KPI Dashboard",
@@ -2887,14 +3012,14 @@ with tabs[1]:
             use_container_width=True,
             key="logistics_dashboard_excel"
         )
-    st.caption("Service and coverage KPIs are planning proxies derived from inventory, demand and lead-time data; they are not OTIF or customer fill-rate measurements unless those source fields are provided.")
+    st.caption(tr("Service and coverage KPIs are planning proxies derived from inventory, demand and lead-time data; they are not OTIF or customer fill-rate measurements unless those source fields are provided."))
 
 # -----------------------------
 # Planning Agent
 # -----------------------------
 with tabs[2]:
-    st.subheader("🧠 Planning Agent")
-    st.caption("Turns the decision engine into an ordered sequence of planner actions.")
+    st.subheader(f"🧠 {tr('Planning Agent')}")
+    st.caption(tr("Turns the decision engine into an ordered sequence of planner actions."))
 
     p1, p2, p3, p4, p5 = st.columns(5)
     p1.metric("Immediate actions", planning_meta["immediate_count"])
@@ -2909,7 +3034,7 @@ with tabs[2]:
             f"{planning_meta['change_worsened']} are classified as worsened."
         )
 
-    st.subheader("Recommended execution sequence")
+    st.subheader(tr("Recommended execution sequence"))
     st.dataframe(
         planning[[
             "Execution_Priority","SKU","Description","Supplier",
@@ -2921,7 +3046,7 @@ with tabs[2]:
         hide_index=True
     )
 
-    st.subheader("Planner rationale")
+    st.subheader(tr("Planner rationale"))
     selected_plan_sku = st.selectbox(
         "Explain the recommended action for",
         options=[""] + planning["SKU"].astype(str).tolist()
@@ -2930,7 +3055,7 @@ with tabs[2]:
         r = planning[planning["SKU"].astype(str) == selected_plan_sku].iloc[0]
         st.info(r["Planning_Rationale"])
 
-    st.subheader("Export Planning Agent")
+    st.subheader(tr("Export Planning Agent"))
     e1, e2 = st.columns(2)
     with e1:
         st.download_button(
@@ -2961,7 +3086,7 @@ with tabs[2]:
 # Inventory
 # -----------------------------
 with tabs[3]:
-    st.subheader("Inventory health")
+    st.subheader(tr("Inventory health"))
     left, right = st.columns(2)
     with left:
         status_counts = a["Status"].value_counts()
@@ -2986,7 +3111,7 @@ with tabs[3]:
 # Forecast
 # -----------------------------
 with tabs[4]:
-    st.subheader("Demand outlook")
+    st.subheader(tr("Demand outlook"))
     f = a[[
         "SKU","Description","Annual_Sales","Avg_Monthly_Demand",
         "Forecast_Next_Month","Forecast_Change_Pct",
@@ -3009,7 +3134,7 @@ with tabs[4]:
 # ABC/XYZ
 # -----------------------------
 with tabs[5]:
-    st.subheader("Segmentation")
+    st.subheader(tr("Segmentation"))
     abc_view = a[[
         "SKU","Description","Annual_Consumption_Value",
         "ABC","Demand_CV","XYZ","ABC_XYZ"
@@ -3027,7 +3152,7 @@ with tabs[5]:
 # Suppliers
 # -----------------------------
 with tabs[6]:
-    st.subheader("Supplier exposure")
+    st.subheader(tr("Supplier exposure"))
     sup = a.groupby("Supplier", as_index=False).agg(
         SKUs=("SKU","count"),
         Inventory_Value=("Inventory_Value","sum"),
@@ -3048,13 +3173,13 @@ with tabs[6]:
 # Scenarios
 # -----------------------------
 with tabs[7]:
-    st.subheader("🧪 Policy simulator")
-    st.caption("Simula decisiones antes de cambiar la política.")
+    st.subheader(f"🧪 {tr('Policy simulator')}")
+    st.caption(tr("Simulate decisions before changing the policy."))
     s1, s2 = st.columns(2)
     with s1:
         sim_safety = st.slider("Safety stock floor", 0, 90, safety_days, key="sim_safety")
     with s2:
-        sim_lead = st.slider("Lead time multiplier", .5, 2.0, 1.0, .05, key="sim_lead")
+        sim_lead = st.slider(tr("Lead time multiplier"), .5, 2.0, 1.0, .05, key="sim_lead")
 
     sim = raw.copy()
     sim["Lead_Time_Days"] = pd.to_numeric(sim["Lead_Time_Days"], errors="coerce").fillna(0)*sim_lead
@@ -3124,8 +3249,8 @@ def _excel_data_quality_bytes(raw, dq):
 # Data Quality
 # -----------------------------
 with tabs[8]:
-    st.subheader("🧹 Data Quality")
-    st.caption("Checks the data before operational decisions are used.")
+    st.subheader(f"🧹 {tr('Data Quality')}")
+    st.caption(tr("Checks the data before operational decisions are used."))
 
     dq_summary = data_quality_summary(raw, dq)
     q1, q2, q3, q4, q5 = st.columns(5)
@@ -3136,23 +3261,23 @@ with tabs[8]:
     q5.metric("Critical", dq_summary["critical"])
 
     if dq_summary["critical"] > 0:
-        st.error("⛔ Critical data-quality issues detected.")
+        st.error(tr("⛔ Critical data-quality issues detected."))
     elif dq_summary["warnings"] > 0:
-        st.warning("⚠️ Data-quality warnings detected. Review them before issuing purchase decisions.")
+        st.warning(tr("⚠️ Data-quality warnings detected. Review them before issuing purchase decisions."))
     else:
-        st.success("✅ All current data-quality checks passed.")
+        st.success(tr("✅ All current data-quality checks passed."))
 
     c1, c2 = st.columns([1, 2])
     with c1:
-        st.metric("Latest period", dq_summary["latest_period"])
-        st.metric("Checks completed", dq_summary["checks"])
+        st.metric(tr("Latest period"), dq_summary["latest_period"])
+        st.metric(tr("Checks completed"), dq_summary["checks"])
     with c2:
         st.dataframe(
             dq[["Category","Check","Status","Count","Details"]],
             use_container_width=True, hide_index=True
         )
 
-    st.subheader("📤 Export Data Quality")
+    st.subheader(f"📤 {tr('Export Data Quality')}")
     dq_html = build_data_quality_report_html(raw, dq)
     dq1, dq2 = st.columns(2)
     with dq1:
@@ -3179,15 +3304,15 @@ with tabs[8]:
                 use_container_width=True,
                 key="data_quality_excel_export"
             )
-    st.caption("HTML provides the management-ready visual report; Excel provides editable quality checks and KPI summary.")
+    st.caption(tr("HTML provides the management-ready visual report; Excel provides editable quality checks and KPI summary."))
 
 
 # -----------------------------
 # Action Plan
 # -----------------------------
 with tabs[9]:
-    st.subheader("📝 Weekly Action Plan")
-    st.caption("Planner-ready worklist generated by the Decision Engine.")
+    st.subheader(f"📝 {tr('Weekly Action Plan')}")
+    st.caption(tr("Planner-ready worklist generated by the Decision Engine."))
 
     f1, f2, f3 = st.columns(3)
     with f1:
@@ -3228,7 +3353,7 @@ with tabs[9]:
         use_container_width=True, hide_index=True
     )
 
-    st.subheader("Supplier follow-up")
+    st.subheader(tr("Supplier follow-up"))
     supplier_skus = plan_view[plan_view["Action_Code"].isin(["BUY_NOW","CONFIRM_PO"])]["SKU"].astype(str).tolist()
     selected_sku = st.selectbox(
         "Generate supplier communication",
@@ -3246,7 +3371,7 @@ with tabs[9]:
         )
 
     action_export_df = plan_view.drop(columns=["Action_Code"])
-    st.markdown("### 📤 Export Action Plan")
+    st.markdown(f"### 📤 {tr('Export Action Plan')}")
     ax1, ax2 = st.columns(2)
     with ax1:
         action_html = build_action_report_html(action_export_df)
@@ -3564,4 +3689,4 @@ with tabs[12]:
 
 
 st.divider()
-st.caption("Supply Chain AI Copilot V2.0.7 — recommendations require planner validation before execution.")
+st.caption("Supply Chain AI Copilot V2.0.8 — recommendations require planner validation before execution.")
