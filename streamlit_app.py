@@ -551,12 +551,21 @@ def build_action_plan(a):
     return pd.DataFrame(plan)
 
 def supplier_message(row, company=""):
+    if st.session_state.get("language", "English") == "Spanish":
+        return (
+            f"Asunto: Seguimiento urgente de supply chain — {row['SKU']} / {row['Description']}\n\n"
+            f"Hola equipo de {row['Supplier']},\n\n"
+            f"Estamos revisando la reposición de {row['SKU']} ({row['Description']}). "
+            f"La cobertura de stock actual es de {row['Days_Cover']:.1f} días y el lead time es de {row['Lead_Time_Days']:.0f} días.\n\n"
+            f"Por favor, confirma el estado actual del pedido, la fecha prevista de expedición y la fecha prevista de entrega. "
+            f"Cuando corresponda, confirma también la cantidad de {row['Recommended_Order']:.0f} unidades.\n\n"
+            f"Gracias,\n{company or 'Equipo de Supply Chain'}"
+        )
     return (
         f"Subject: Urgent supply chain follow-up — {row['SKU']} / {row['Description']}\n\n"
         f"Hello {row['Supplier']} team,\n\n"
         f"We are reviewing replenishment for {row['SKU']} ({row['Description']}). "
-        f"The current stock coverage is {row['Days_Cover']:.1f} days and the lead time is "
-        f"{row['Lead_Time_Days']:.0f} days.\n\n"
+        f"The current stock coverage is {row['Days_Cover']:.1f} days and the lead time is {row['Lead_Time_Days']:.0f} days.\n\n"
         f"Please confirm the current order status, expected ship date and expected delivery date. "
         f"Where applicable, please confirm the quantity of {row['Recommended_Order']:.0f} units.\n\n"
         f"Thank you,\n{company or 'Supply Chain Team'}"
@@ -623,9 +632,47 @@ def _table_html(df, columns, currency_cols=None, bar_cols=None, status_cols=None
         rows.append("<tr>" + "".join(cells) + "</tr>")
     return "".join(rows)
 
+_REPORT_TRANSLATIONS_ES = {
+    "Inventory value":"Valor de inventario", "Purchase requirement":"Necesidad de compra", "Service risk exposure":"Exposición de riesgo de servicio",
+    "Excess inventory":"Exceso de inventario", "Critical":"Crítico", "Review":"Revisar", "Excess":"Exceso", "Data warnings":"Avisos de datos",
+    "Latest period":"Último periodo", "Executive priorities":"Prioridades ejecutivas", "Supplier exposure":"Exposición por proveedor",
+    "Weekly action plan":"Plan de acción semanal", "Data quality":"Calidad de datos", "Service risk":"Riesgo de servicio",
+    "Purchase exposure":"Exposición de compras", "Inventory":"Inventario", "Priority":"Prioridad", "Timing":"Momento", "Qty":"Cantidad",
+    "Purchase":"Compra", "Owner":"Responsable", "Deadline":"Fecha límite", "Reason":"Motivo", "Confidence":"Confianza",
+    "Category":"Categoría", "Check":"Comprobación", "Status":"Estado", "Count":"Cantidad", "Details":"Detalles",
+    "Inventory health by status":"Salud del inventario por estado", "Highest excess exposure":"Mayor exposición de exceso",
+    "Coverage":"Cobertura", "Excess qty":"Cantidad en exceso", "Excess value":"Valor en exceso", "Highest service-risk exposure":"Mayor exposición de riesgo de servicio",
+    "Lead time":"Lead time", "Risk qty":"Cantidad en riesgo", "Risk value":"Valor en riesgo", "Purchase lines":"Líneas de compra",
+    "Units to order":"Unidades a pedir", "Suppliers":"Proveedores", "Purchase requirements by supplier":"Necesidades de compra por proveedor",
+    "Lines":"Líneas", "Units":"Unidades", "Recommended purchases":"Compras recomendadas", "Unit cost":"Coste unitario",
+    "Planner guidance":"Guía para el planner", "Total actions":"Total de acciones", "Immediate":"Inmediatas", "Owners":"Responsables",
+    "Planner worklist":"Lista de trabajo del planner", "With critical SKUs":"Con SKUs críticos", "Supplier risk ranking":"Ranking de riesgo de proveedores",
+    "Risk score":"Puntuación de riesgo", "Management interpretation":"Interpretación para dirección", "Quality status":"Estado de calidad",
+    "Detailed checks":"Comprobaciones detalladas", "Immediate actions":"Acciones inmediatas", "Risk potentially addressed":"Riesgo potencialmente abordable",
+    "Block replenishment":"Bloquear reposición", "Blocked exposure":"Exposición bloqueada", "Execution sequence":"Secuencia de ejecución",
+    "Step":"Paso", "Task":"Tarea", "Dependency":"Dependencia", "Risk addressed":"Riesgo abordado", "Planner rationale":"Justificación para el planner",
+    "Rationale":"Justificación", "Comparison":"Comparación", "Purchase delta":"Variación de compra", "Action changes":"Cambios de acción",
+    "Worsened":"Empeorado", "Improved":"Mejorado", "Watch":"Vigilar", "Critical delta":"Variación de críticos", "Top changes":"Principales cambios",
+    "Previous action":"Acción anterior", "Current action":"Acción actual", "Cover Δ":"Variación de cobertura", "Purchase Δ":"Variación de compra",
+    "Service risk Δ":"Variación de riesgo de servicio", "Classification":"Clasificación", "Worsened / watch":"Empeorado / vigilar",
+    "Structural and consistency checks for the current dataset.":"Comprobaciones estructurales y de consistencia del dataset actual.",
+    "Planner-ready operational worklist with ownership and deadlines.":"Lista operativa preparada para el planner, con responsables y fechas límite.",
+    "Supplier concentration, service exposure and purchasing exposure.":"Concentración de proveedores, exposición de servicio y exposición de compras.",
+    "Generated":"Generado", "Decision support only. Validate purchase execution and supplier commitments before release.":"Solo para soporte a la decisión. Valida la ejecución de compras y los compromisos de los proveedores antes de su liberación.",
+    "Supply Chain AI Copilot V2.0.9":"Supply Chain AI Copilot V2.0.9",
+    "No comparable periods are available.":"No hay periodos comparables disponibles.",
+}
+
+def _localize_report_html(html):
+    if st.session_state.get("language", "English") != "Spanish":
+        return html
+    for en, es in _REPORT_TRANSLATIONS_ES.items():
+        html = html.replace(en, es)
+    return html
+
 def _html_shell(title, subtitle, body):
     generated = datetime.now().strftime("%Y-%m-%d %H:%M")
-    return f"""<!doctype html>
+    return _localize_report_html(f"""<!doctype html>
 <html>
 <head>
 <meta charset="utf-8">
@@ -665,13 +712,13 @@ td{{padding:10px;border-bottom:1px solid var(--line);vertical-align:top}}
 <div class="header">
 <h1>{html_lib.escape(title)}</h1>
 <p>{html_lib.escape(subtitle)}</p>
-<div class="meta">Generated {generated} · Supply Chain AI Copilot V2.0.8</div>
+<div class="meta">Generated {generated} · Supply Chain AI Copilot V2.0.9</div>
 </div>
 {body}
 <div class="footer">Decision support only. Validate purchase execution and supplier commitments before release.</div>
 </div>
 </body>
-</html>"""
+</html>""")
 
 def build_executive_html(a, raw, dq, plan):
     critical = int((a["Status"] == "🔴 CRITICAL").sum())
@@ -889,7 +936,7 @@ def build_change_monitor_html(comparison, meta):
         return _html_shell(
             "🔄 Change Monitor Report",
             "No comparison available.",
-            '<div class="section"><div class="note">No hay dos periodos comparables disponibles.</div></div>'
+            '<div class="section"><div class="note">No comparable periods are available.</div></div>'
         )
     worsened = comparison[comparison["Change_Classification"].isin(["WORSENED","WATCH"])].head(15)
     improved = comparison[comparison["Change_Classification"]=="IMPROVED"].head(15)
@@ -975,7 +1022,8 @@ def _xlsx_write_df(ws, df, start_row, start_col, columns, workbook,
         workbook.add_format({"border": 0, "valign": "top", "text_wrap": True})
     )
 
-    for j, col in enumerate(columns):
+    display_columns = [(_COLUMN_TRANSLATIONS_ES.get(str(c), str(c)) if st.session_state.get("language", "English") == "Spanish" else str(c)) for c in columns]
+    for j, col in enumerate(display_columns):
         ws.write(start_row, start_col + j, col, header_fmt)
 
     for i, row in enumerate(df[columns].itertuples(index=False, name=None), start=1):
@@ -996,7 +1044,7 @@ def _xlsx_write_df(ws, df, start_row, start_col, columns, workbook,
         ws.add_table(start_row, start_col, end_row, end_col, {
             "name": table_name,
             "style": "Table Style Medium 2",
-            "columns": [{"header": c} for c in columns],
+            "columns": [{"header": c} for c in display_columns],
         })
 
     for j, col in enumerate(columns):
@@ -1018,6 +1066,8 @@ def _xlsx_title(ws, title, subtitle, workbook, last_col=11):
     subtitle_fmt = workbook.add_format({
         "italic": True, "font_color": "#64748B", "text_wrap": True
     })
+    title = _REPORT_TRANSLATIONS_ES.get(title, tr(title)) if st.session_state.get("language", "English") == "Spanish" else title
+    subtitle = _REPORT_TRANSLATIONS_ES.get(subtitle, tr(subtitle)) if st.session_state.get("language", "English") == "Spanish" else subtitle
     ws.merge_range(0, 0, 0, last_col, title, title_fmt)
     ws.merge_range(1, 0, 1, last_col, subtitle, subtitle_fmt)
     ws.set_row(0, 28)
@@ -1033,6 +1083,7 @@ def _xlsx_kpi_block(ws, workbook, row, col, width, label, value, fill):
         "bg_color": fill, "align": "center", "valign": "vcenter",
         "text_wrap": True
     })
+    label = _REPORT_TRANSLATIONS_ES.get(label, tr(label)) if st.session_state.get("language", "English") == "Spanish" else label
     ws.merge_range(row, col, row, col + width - 1, label, label_fmt)
     ws.merge_range(row + 1, col, row + 2, col + width - 1, value, value_fmt)
 
@@ -1062,6 +1113,8 @@ def _xlsx_write_section_chart(ws, workbook, chart_type, title, categories_col, v
     if last_row < first_row:
         return
     chart = workbook.add_chart({"type": chart_type})
+    if st.session_state.get("language", "English") == "Spanish":
+        title = _REPORT_TRANSLATIONS_ES.get(title, tr(title))
     sheet_ref = ws.name.replace("'", "''")
     categories = f"='{sheet_ref}'!${xlsxwriter.utility.xl_col_to_name(categories_col)}${first_row+1}:${xlsxwriter.utility.xl_col_to_name(categories_col)}${last_row+1}"
     values = f"='{sheet_ref}'!${xlsxwriter.utility.xl_col_to_name(values_col)}${first_row+1}:${xlsxwriter.utility.xl_col_to_name(values_col)}${last_row+1}"
@@ -1080,7 +1133,7 @@ def _xlsx_build_executive(a, raw, dq, plan):
     wb = xlsxwriter.Workbook(buf, {"in_memory": True})
     fmt = _xlsx_base_formats(wb)
 
-    ws = wb.add_worksheet("Executive")
+    ws = wb.add_worksheet(tr("Executive"))
     _xlsx_title(ws, "Supply Chain AI — Executive Report",
                 "Dashboard view mirroring the Executive HTML report.", wb, 11)
 
@@ -1117,7 +1170,7 @@ def _xlsx_build_executive(a, raw, dq, plan):
     _xlsx_write_section_chart(ws, wb, "column", "Supplier purchase exposure", 0, 3,
                               sup_row + 1, sup_row + min(len(supplier), 10), "H22")
 
-    action_ws = wb.add_worksheet("Action Plan")
+    action_ws = wb.add_worksheet(tr("Action Plan"))
     _xlsx_title(action_ws, "Weekly Action Plan", "Planner-ready worklist.", wb, 9)
     _xlsx_write_df(
         action_ws, plan, 3, 0,
@@ -1127,7 +1180,7 @@ def _xlsx_build_executive(a, raw, dq, plan):
         widths={"Description": 30, "Reason": 34}
     )
 
-    dq_ws = wb.add_worksheet("Data Quality")
+    dq_ws = wb.add_worksheet(tr("Data Quality"))
     _xlsx_title(dq_ws, "Data Quality", "Structural and consistency checks.", wb, 4)
     _xlsx_write_df(dq_ws, dq, 3, 0, ["Category","Check","Status","Count","Details"], wb, "ExecutiveDataQuality",
                    widths={"Check": 30, "Details": 42})
@@ -1138,7 +1191,7 @@ def _xlsx_build_detailed(a, raw, dq, plan):
     wb = xlsxwriter.Workbook(buf, {"in_memory": True})
     fmt = _xlsx_base_formats(wb)
 
-    inv = wb.add_worksheet("Inventory Risk")
+    inv = wb.add_worksheet(tr("Inventory Risk"))
     _xlsx_title(inv, "Inventory & Service Risk", "Excess inventory and service-risk exposure.", wb, 10)
     x = a.sort_values("Excess_Inventory_Value", ascending=False).head(20)
     row0 = 3
@@ -1153,7 +1206,7 @@ def _xlsx_build_detailed(a, raw, dq, plan):
     _xlsx_write_section_chart(inv, wb, "bar", "Excess inventory value", 0, 9,
                               row0 + 1, row0 + min(len(x), 10), "M4")
 
-    pur = wb.add_worksheet("Purchase Plan")
+    pur = wb.add_worksheet(tr("Purchase Plan"))
     _xlsx_title(pur, "Purchase Plan", "Recommended replenishment by SKU and supplier.", wb, 10)
     x = a[a["Recommended_Order"] > 0].sort_values("Purchase_Value", ascending=False)
     row0 = 3
@@ -1169,7 +1222,7 @@ def _xlsx_build_detailed(a, raw, dq, plan):
     _xlsx_write_section_chart(pur, wb, "column", "Purchase value by SKU", 0, 6,
                               row0 + 1, row0 + min(len(x), 10), "M4")
 
-    act = wb.add_worksheet("Action Plan")
+    act = wb.add_worksheet(tr("Action Plan"))
     _xlsx_title(act, "Weekly Action Plan", "Owner, timing, reason and confidence.", wb, 9)
     _xlsx_write_df(
         act, plan, 3, 0,
@@ -1179,7 +1232,7 @@ def _xlsx_build_detailed(a, raw, dq, plan):
         widths={"Description": 30, "Reason": 34}
     )
 
-    sup = wb.add_worksheet("Supplier Risk")
+    sup = wb.add_worksheet(tr("Supplier Risk"))
     _xlsx_title(sup, "Supplier Risk", "Risk concentration and economic exposure.", wb, 8)
     s = a.groupby("Supplier", as_index=False).agg(
         SKUs=("SKU","count"),
@@ -1206,7 +1259,7 @@ def _xlsx_build_detailed(a, raw, dq, plan):
     _xlsx_write_section_chart(sup, wb, "column", "Supplier risk score", 0, 4,
                               row0 + 1, row0 + min(len(s), 10), "K4")
 
-    dq_ws = wb.add_worksheet("Data Quality")
+    dq_ws = wb.add_worksheet(tr("Data Quality"))
     _xlsx_title(dq_ws, "Data Quality", "Severity and counts for the current dataset.", wb, 4)
     _xlsx_write_df(dq_ws, dq, 3, 0, ["Category","Check","Status","Count","Details"], wb, "DetailedDataQuality",
                    widths={"Check": 30, "Details": 42})
@@ -1216,7 +1269,7 @@ def _xlsx_build_complete(a, raw, dq, plan):
     wb = _xlsx_build_detailed(a, raw, dq, plan)
 
     # Complete pack adds Executive + Source Data to the detailed workbook.
-    ex = wb.add_worksheet("Executive")
+    ex = wb.add_worksheet(tr("Executive"))
     _xlsx_title(ex, "Supply Chain AI — Complete Management Pack",
                 "Executive dashboard for the full workbook.", wb, 11)
     _xlsx_kpi_block(ex, wb, 3, 0, 3, "Inventory value", f"€{a['Inventory_Value'].sum():,.0f}", "#EAF2FF")
@@ -1232,7 +1285,7 @@ def _xlsx_build_complete(a, raw, dq, plan):
         widths={"Description": 30}
     )
 
-    src_ws = wb.add_worksheet("Source Data")
+    src_ws = wb.add_worksheet(tr("Source Data"))
     _xlsx_title(src_ws, "Source Data", "Normalized source dataset used by the decision engine.", wb, max(5, len(raw.columns)-1))
     _xlsx_write_df(src_ws, raw, 3, 0, list(raw.columns), wb, "SourceData")
 
@@ -1246,7 +1299,7 @@ def _excel_planning_agent_bytes(planning, meta):
     buf = io.BytesIO()
     wb = xlsxwriter.Workbook(buf, {"in_memory": True})
     fmt = _xlsx_base_formats(wb)
-    ws = wb.add_worksheet("Planning Agent")
+    ws = wb.add_worksheet(tr("Planning Agent"))
 
     _xlsx_title(
         ws,
@@ -1308,7 +1361,7 @@ def _excel_change_monitor_bytes(comparison, comparison_meta):
     buf = io.BytesIO()
     wb = xlsxwriter.Workbook(buf, {"in_memory": True})
     fmt = _xlsx_base_formats(wb)
-    ws = wb.add_worksheet("Change Monitor")
+    ws = wb.add_worksheet(tr("Change Monitor"))
 
     _xlsx_title(
         ws,
@@ -1437,7 +1490,7 @@ def _xlsx_stream_build(kind, a, raw, dq, plan, comparison=None, comparison_meta=
 
     if kind == "executive":
         fmt = _xlsx_base_formats(wb)
-        ws = wb.add_worksheet("Executive")
+        ws = wb.add_worksheet(tr("Executive"))
         _xlsx_title(ws, "Supply Chain AI — Executive Report", "Dashboard view mirroring the Executive HTML report.", wb, 11)
         _xlsx_kpi_block(ws, wb, 3, 0, 3, "Inventory value", f"€{a['Inventory_Value'].sum():,.0f}", "#EAF2FF")
         _xlsx_kpi_block(ws, wb, 3, 3, 3, "Purchase requirement", f"€{a['Purchase_Value'].sum():,.0f}", "#ECFDF5")
@@ -1448,37 +1501,37 @@ def _xlsx_stream_build(kind, a, raw, dq, plan, comparison=None, comparison_meta=
                        ["SKU","Description","Supplier","Status","Action","Action_Timing","Recommended_Order","Purchase_Value","Days_Cover","Lead_Time_Days"],
                        wb, "ExecPriorities", formats={**fmt, "Purchase_Value": fmt["currency"], "Recommended_Order": fmt["integer"], "Days_Cover": fmt["number"], "Lead_Time_Days": fmt["number"]},
                        widths={"Description": 30})
-        action_ws = wb.add_worksheet("Action Plan")
+        action_ws = wb.add_worksheet(tr("Action Plan"))
         _xlsx_title(action_ws, "Weekly Action Plan", "Planner-ready worklist.", wb, 9)
         _xlsx_write_df(action_ws, plan, 3, 0,
                        ["Priority","SKU","Description","Supplier","Action","Owner","Deadline","Reason","Confidence","Purchase_Value"],
                        wb, "ExecActionPlan", formats={**fmt, "Purchase_Value": fmt["currency"]}, widths={"Description":30,"Reason":34})
-        dq_ws = wb.add_worksheet("Data Quality")
+        dq_ws = wb.add_worksheet(tr("Data Quality"))
         _xlsx_title(dq_ws, "Data Quality", "Structural and consistency checks.", wb, 4)
         _xlsx_write_df(dq_ws, dq, 3, 0, ["Category","Check","Status","Count","Details"], wb, "ExecDQ", widths={"Check":30,"Details":42})
 
     elif kind == "detailed":
         fmt = _xlsx_base_formats(wb)
-        inv = wb.add_worksheet("Inventory Risk")
+        inv = wb.add_worksheet(tr("Inventory Risk"))
         _xlsx_title(inv, "Inventory & Service Risk", "Excess inventory and service-risk exposure.", wb, 10)
         x = a.sort_values("Excess_Inventory_Value", ascending=False).head(20)
         _xlsx_write_df(inv, x, 3, 0,
                        ["SKU","Description","Supplier","Status","Days_Cover","Lead_Time_Days","Stock","Open_PO","Excess_Inventory_Qty","Excess_Inventory_Value","Service_Risk_Value"],
                        wb, "InventoryRisk", formats={**fmt, "Excess_Inventory_Value": fmt["currency"], "Service_Risk_Value": fmt["currency"]}, widths={"Description":30})
         _xlsx_write_section_chart(inv, wb, "bar", "Excess inventory value", 0, 9, 4, min(3+len(x),13), "M4")
-        pur = wb.add_worksheet("Purchase Plan")
+        pur = wb.add_worksheet(tr("Purchase Plan"))
         _xlsx_title(pur, "Purchase Plan", "Recommended replenishment by SKU and supplier.", wb, 10)
         x = a[a["Recommended_Order"] > 0].sort_values("Purchase_Value", ascending=False)
         _xlsx_write_df(pur, x, 3, 0,
                        ["SKU","Description","Supplier","Action","Recommended_Order","Unit_Cost","Purchase_Value","Days_Cover","Lead_Time_Days","Open_PO","PO_Adequacy"],
                        wb, "PurchasePlan", formats={**fmt, "Unit_Cost": fmt["currency"], "Purchase_Value": fmt["currency"], "Recommended_Order":fmt["integer"], "Open_PO":fmt["integer"]}, widths={"Description":30})
         _xlsx_write_section_chart(pur, wb, "column", "Purchase value by SKU", 0, 6, 4, min(3+len(x),13), "M4")
-        act = wb.add_worksheet("Action Plan")
+        act = wb.add_worksheet(tr("Action Plan"))
         _xlsx_title(act, "Weekly Action Plan", "Owner, timing, reason and confidence.", wb, 9)
         _xlsx_write_df(act, plan, 3, 0,
                        ["Priority","SKU","Description","Supplier","Action","Owner","Deadline","Reason","Confidence","Purchase_Value"],
                        wb, "DetailedActionPlan", formats={**fmt, "Purchase_Value": fmt["currency"]}, widths={"Description":30,"Reason":34})
-        sup = wb.add_worksheet("Supplier Risk")
+        sup = wb.add_worksheet(tr("Supplier Risk"))
         _xlsx_title(sup, "Supplier Risk", "Risk concentration and economic exposure.", wb, 8)
         s = a.groupby("Supplier", as_index=False).agg(
             SKUs=("SKU","count"), Critical=("Status", lambda z:int((z=="🔴 CRITICAL").sum())),
@@ -1492,13 +1545,13 @@ def _xlsx_stream_build(kind, a, raw, dq, plan, comparison=None, comparison_meta=
                        ["Supplier","SKUs","Critical","Review","Supplier_Risk_Score","Service_Risk_Value","Purchase_Value","Inventory_Value","Excess_Inventory_Value"],
                        wb, "SupplierRisk", formats={**fmt, "Service_Risk_Value":fmt["currency"],"Purchase_Value":fmt["currency"],"Inventory_Value":fmt["currency"],"Excess_Inventory_Value":fmt["currency"]}, widths={"Supplier":22})
         _xlsx_write_section_chart(sup, wb, "column", "Supplier risk score", 0, 4, 4, min(3+len(s),13), "K4")
-        dqs = wb.add_worksheet("Data Quality")
+        dqs = wb.add_worksheet(tr("Data Quality"))
         _xlsx_title(dqs, "Data Quality", "Severity and counts for the current dataset.", wb, 4)
         _xlsx_write_df(dqs, dq, 3, 0, ["Category","Check","Status","Count","Details"], wb, "DetailedDQ", widths={"Check":30,"Details":42})
 
     else:
         fmt = _xlsx_base_formats(wb)
-        ex = wb.add_worksheet("Executive")
+        ex = wb.add_worksheet(tr("Executive"))
         _xlsx_title(ex, "Supply Chain AI — Complete Management Pack", "Executive dashboard for the full workbook.", wb, 11)
         _xlsx_kpi_block(ex, wb, 3, 0, 3, "Inventory value", f"€{a['Inventory_Value'].sum():,.0f}", "#EAF2FF")
         _xlsx_kpi_block(ex, wb, 3, 3, 3, "Purchase requirement", f"€{a['Purchase_Value'].sum():,.0f}", "#ECFDF5")
@@ -1510,27 +1563,27 @@ def _xlsx_stream_build(kind, a, raw, dq, plan, comparison=None, comparison_meta=
                        wb, "CompleteExec", formats={**fmt, "Purchase_Value":fmt["currency"],"Recommended_Order":fmt["integer"]}, widths={"Description":30})
 
         # Detailed sheets are included as part of the complete pack.
-        inv = wb.add_worksheet("Inventory Risk")
+        inv = wb.add_worksheet(tr("Inventory Risk"))
         _xlsx_title(inv, "Inventory & Service Risk", "Excess inventory and service-risk exposure.", wb, 10)
         x = a.sort_values("Excess_Inventory_Value", ascending=False).head(20)
         _xlsx_write_df(inv, x, 3, 0,
                        ["SKU","Description","Supplier","Status","Days_Cover","Lead_Time_Days","Stock","Open_PO","Excess_Inventory_Qty","Excess_Inventory_Value","Service_Risk_Value"],
                        wb, "CompleteInventoryRisk", formats={**fmt,"Excess_Inventory_Value":fmt["currency"],"Service_Risk_Value":fmt["currency"]}, widths={"Description":30})
 
-        pur = wb.add_worksheet("Purchase Plan")
+        pur = wb.add_worksheet(tr("Purchase Plan"))
         _xlsx_title(pur, "Purchase Plan", "Recommended replenishment by SKU and supplier.", wb, 10)
         x = a[a["Recommended_Order"] > 0].sort_values("Purchase_Value", ascending=False)
         _xlsx_write_df(pur, x, 3, 0,
                        ["SKU","Description","Supplier","Action","Recommended_Order","Unit_Cost","Purchase_Value","Days_Cover","Lead_Time_Days","Open_PO","PO_Adequacy"],
                        wb, "CompletePurchasePlan", formats={**fmt,"Unit_Cost":fmt["currency"],"Purchase_Value":fmt["currency"],"Recommended_Order":fmt["integer"],"Open_PO":fmt["integer"]}, widths={"Description":30})
 
-        act = wb.add_worksheet("Action Plan")
+        act = wb.add_worksheet(tr("Action Plan"))
         _xlsx_title(act, "Weekly Action Plan", "Owner, timing, reason and confidence.", wb, 9)
         _xlsx_write_df(act, plan, 3, 0,
                        ["Priority","SKU","Description","Supplier","Action","Owner","Deadline","Reason","Confidence","Purchase_Value"],
                        wb, "CompleteActionPlan", formats={**fmt,"Purchase_Value":fmt["currency"]}, widths={"Description":30,"Reason":34})
 
-        sup = wb.add_worksheet("Supplier Risk")
+        sup = wb.add_worksheet(tr("Supplier Risk"))
         _xlsx_title(sup, "Supplier Risk", "Risk concentration and economic exposure.", wb, 8)
         s = a.groupby("Supplier", as_index=False).agg(
             SKUs=("SKU","count"), Critical=("Status", lambda z:int((z=="🔴 CRITICAL").sum())),
@@ -1544,17 +1597,17 @@ def _xlsx_stream_build(kind, a, raw, dq, plan, comparison=None, comparison_meta=
                        ["Supplier","SKUs","Critical","Review","Supplier_Risk_Score","Service_Risk_Value","Purchase_Value","Inventory_Value","Excess_Inventory_Value"],
                        wb, "CompleteSupplierRisk", formats={**fmt,"Service_Risk_Value":fmt["currency"],"Purchase_Value":fmt["currency"],"Inventory_Value":fmt["currency"],"Excess_Inventory_Value":fmt["currency"]}, widths={"Supplier":22})
 
-        dqs = wb.add_worksheet("Data Quality")
+        dqs = wb.add_worksheet(tr("Data Quality"))
         _xlsx_title(dqs, "Data Quality", "Severity and counts for the current dataset.", wb, 4)
         _xlsx_write_df(dqs, dq, 3, 0, ["Category","Check","Status","Count","Details"], wb, "CompleteDQ", widths={"Check":30,"Details":42})
 
-        src_ws = wb.add_worksheet("Source Data")
+        src_ws = wb.add_worksheet(tr("Source Data"))
         _xlsx_title(src_ws, "Source Data", "Normalized source dataset used by the decision engine.", wb, max(5, len(raw.columns)-1))
         _xlsx_write_df(src_ws, raw, 3, 0, list(raw.columns), wb, "CompleteSourceData")
 
 
     if comparison is not None and comparison_meta is not None and not comparison.empty:
-        cm = wb.add_worksheet("Change Monitor")
+        cm = wb.add_worksheet(tr("Change Monitor"))
         _xlsx_title(
             cm,
             "Change Monitor",
@@ -1593,7 +1646,7 @@ def _xlsx_stream_build(kind, a, raw, dq, plan, comparison=None, comparison_meta=
             pass
 
     planning_sheet_df, planning_meta_xlsx = build_planning_agent(a, comparison, comparison_meta)
-    pa = wb.add_worksheet("Planning Agent")
+    pa = wb.add_worksheet(tr("Planning Agent"))
     fmt_pa = _xlsx_base_formats(wb)
     _xlsx_title(pa, "Supply Chain AI — Planning Agent",
                 "Ordered execution sequence generated by the decision engine.", wb, 11)
@@ -1940,26 +1993,24 @@ def kpis(a):
 
 def decision_text(a):
     top = a.sort_values("Decision_Score", ascending=False).head(10)
+    es = st.session_state.get("language", "English") == "Spanish"
     lines = [
-        "### Prioridades de esta semana",
+        tr("### Priorities for this week"),
         "",
-        "| Prioridad | SKU | Acción | Timing | Cantidad | Riesgo | Confianza |",
+        tr("| Priority | SKU | Action | Timing | Quantity | Risk | Confidence |"),
         "|---|---|---|---|---:|---|---|"
     ]
     for i, (_, r) in enumerate(top.iterrows(), start=1):
-        if r["Action"] == "BUY_NOW":
-            action = "Comprar ahora"
-        elif r["Action"] == "CONFIRM_PO":
-            action = "Confirmar PO"
-        elif r["Action"] == "DO_NOT_BUY":
-            action = "No comprar"
-        elif r["Action"] == "REVIEW":
-            action = "Revisar"
-        else:
-            action = "Monitorizar"
-
+        action_map = {
+            "BUY_NOW": tr("Buy now"),
+            "CONFIRM_PO": tr("Confirm PO"),
+            "DO_NOT_BUY": tr("Do not buy"),
+            "REVIEW": tr("Review"),
+            "MONITOR": tr("Monitor"),
+        }
+        action = action_map.get(r["Action"], r["Action"])
         qty = f"{r['Recommended_Order']:.0f}" if r["Recommended_Order"] > 0 else "—"
-        risk = f"{r['Days_Cover']:.1f}d cover / {r['Lead_Time_Days']:.0f}d LT"
+        risk = f"{r['Days_Cover']:.1f}d {tr('cover')} / {r['Lead_Time_Days']:.0f}d LT"
         lines.append(
             f"| {i} | **{r['SKU']}** | {action} | {r['Action_Timing']} | "
             f"{qty} | {risk} | {r['Decision_Confidence']} |"
@@ -1972,13 +2023,13 @@ def decision_text(a):
 
     lines += [
         "",
-        f"**Compra recomendada total:** €{purchase_value:,.0f}",
-        f"**Inventario actualmente en exceso:** €{excess_value:,.0f}",
+        f"**{tr('Total recommended purchase')}:** €{purchase_value:,.0f}",
+        f"**{tr('Current excess inventory')}:** €{excess_value:,.0f}",
     ]
 
     if not critical.empty:
         lines.append("")
-        lines.append("**Acción inmediata:** emitir/validar pedidos de los SKUs `BUY_NOW` y confirmar fecha de entrega con el proveedor.")
+        lines.append(tr("**Immediate action:** issue/validate orders for `BUY_NOW` SKUs and confirm the delivery date with the supplier."))
     return "\n".join(lines)
 
 def agent_purchase_tool(a):
@@ -2153,72 +2204,46 @@ def route_agent(question, a, comparison=None, comparison_meta=None, raw=None):
 
 def agent_local_response(question, a, comparison=None, comparison_meta=None, raw=None):
     tools = route_agent(question, a, comparison, comparison_meta, raw)
-    lines = ["## Supply Chain Agent — análisis"]
+    lines = [tr("## Supply Chain Agent — analysis")]
     for tool in tools:
         lines.append(f"### {tool['name']}")
         if tool["name"] == "logistics_kpis":
             k = tool["kpis"]
             lines.append(
-                f"Inventario **€{k['inventory_value']:,.0f}** · rotación **{k['inventory_turns']:.2f}x** · "
-                f"cobertura agregada **{k['days_cover']:.1f} días** · cobertura de lead time **{k['lead_time_coverage_pct']:.1f}%**."
+                f"{tr('Inventory')} **€{k['inventory_value']:,.0f}** · {tr('turns')} **{k['inventory_turns']:.2f}x** · "
+                f"{tr('aggregate cover')} **{k['days_cover']:.1f} {tr('days')}** · {tr('lead-time coverage')} **{k['lead_time_coverage_pct']:.1f}%**."
             )
             lines.append(
-                f"Riesgo de servicio **€{k['service_risk_value']:,.0f}** · exceso **€{k['excess_inventory_value']:,.0f}** · "
-                f"PO abiertas **€{k['open_po_value']:,.0f}** · compra recomendada **€{k['purchase_requirement']:,.0f}**."
+                f"{tr('Service risk')} **€{k['service_risk_value']:,.0f}** · {tr('excess')} **€{k['excess_inventory_value']:,.0f}** · "
+                f"{tr('open POs')} **€{k['open_po_value']:,.0f}** · {tr('recommended purchase')} **€{k['purchase_requirement']:,.0f}**."
             )
         elif tool["name"] == "purchase_planner":
             k = tool["kpis"]
-            lines.append(f"Compra recomendada: **€{k['recommended_purchase_value']:,.0f}** · {k['lines']} líneas · {k['critical_lines']} críticas.")
-            lines += [
-                f"- **{r['SKU']}** → {r['Action']} · {r['Recommended_Order']:.0f} uds · cover {r['Days_Cover']:.1f}d · LT {r['Lead_Time_Days']:.0f}d."
-                for r in tool["rows"][:8]
-            ]
+            lines.append(f"{tr('Recommended purchase')}: **€{k['recommended_purchase_value']:,.0f}** · {k['lines']} {tr('lines')} · {k['critical_lines']} {tr('critical') }.")
+            lines += [f"- **{r['SKU']}** → {r['Action']} · {r['Recommended_Order']:.0f} {tr('units')} · {tr('cover')} {r['Days_Cover']:.1f}d · LT {r['Lead_Time_Days']:.0f}d." for r in tool["rows"][:8]]
         elif tool["name"] == "inventory_optimizer":
             k = tool["kpis"]
-            lines.append(f"Exceso estimado: **€{k['excess_inventory_value']:,.0f}** en {k['sku_count']} SKUs.")
+            lines.append(f"{tr('Estimated excess')}: **€{k['excess_inventory_value']:,.0f}** {tr('across')} {k['sku_count']} SKUs.")
         elif tool["name"] == "service_risk":
             k = tool["kpis"]
-            lines.append(f"Exposición de servicio: **€{k['service_risk_value']:,.0f}** en {k['sku_count']} SKUs.")
+            lines.append(f"{tr('Service exposure')}: **€{k['service_risk_value']:,.0f}** {tr('across')} {k['sku_count']} SKUs.")
         elif tool["name"] == "supplier_risk":
-            lines += [
-                f"- **{r['Supplier']}** → críticos {int(r['Critical'])}, compras €{r['Purchase_Value']:,.0f}, riesgo servicio €{r['Service_Risk_Value']:,.0f}."
-                for r in tool["rows"][:8]
-            ]
+            lines += [f"- **{r['Supplier']}** → {tr('critical')} {int(r['Critical'])}, {tr('purchase')} €{r['Purchase_Value']:,.0f}, {tr('service risk lower')} €{r['Service_Risk_Value']:,.0f}." for r in tool["rows"][:8]]
         elif tool["name"] == "demand_outlook":
-            lines.append("Mayores subidas de demanda:")
-            lines += [
-                f"- **{r['SKU']}** → forecast {r['Forecast_Next_Month']:.0f} uds ({r['Forecast_Change_Pct']:+.1f}%)."
-                for r in tool["rising"][:5]
-            ]
+            lines.append(tr("Largest demand increases:"))
+            lines += [f"- **{r['SKU']}** → {tr('forecast')} {r['Forecast_Next_Month']:.0f} {tr('units')} ({r['Forecast_Change_Pct']:+.1f}%)." for r in tool["rising"][:5]]
         elif tool["name"] == "planning_agent":
             k = tool["kpis"]
-            lines.append(
-                f"Plan de ejecución: **{k['immediate_count']} acciones inmediatas**, "
-                f"€{k['purchase_value']:,.0f} de exposición de compra y "
-                f"€{k['service_risk_addressed']:,.0f} de riesgo de servicio potencialmente abordable."
-            )
-            lines += [
-                f"- **Paso {r['Execution_Priority']} — {r['SKU']}**: {r['Execution_Task']} · "
-                f"{r['Dependency']} · {r['Action_Timing']}."
-                for r in tool["rows"][:8]
-            ]
+            lines.append(f"{tr('Execution plan')}: **{k['immediate_count']} {tr('immediate actions')}**, €{k['purchase_value']:,.0f} {tr('purchase exposure')} and €{k['service_risk_addressed']:,.0f} {tr('service risk potentially addressable')}.")
+            lines += [f"- **{tr('Step')} {r['Execution_Priority']} — {r['SKU']}**: {r['Execution_Task']} · {r['Dependency']} · {r['Action_Timing']}." for r in tool["rows"][:8]]
         elif tool["name"] == "change_monitor":
             if not tool["kpis"].get("available"):
-                lines.append("No hay dos periodos comparables disponibles.")
+                lines.append(tr("No comparable periods are available."))
             else:
                 k = tool["kpis"]
-                lines.append(
-                    f"Comparación **{k['previous_period']} → {k['current_period']}**: "
-                    f"compras {k['purchase_delta']:+,.0f} €, riesgo de servicio {k['service_risk_delta']:+,.0f} €, "
-                    f"cambios de acción {k['action_changes']}."
-                )
-                lines += [
-                    f"- **{r['SKU']}** → {r['Change_Classification']} · cobertura {r['Days_Cover_Delta']:+.1f}d · "
-                    f"compra {r['Purchase_Value_Delta']:+,.0f} € · {r['Change_Reason']}"
-                    for r in tool["rows"][:8]
-                ]
+                lines.append(f"{tr('Comparison')} **{k['previous_period']} → {k['current_period']}**: {tr('purchase')} {k['purchase_delta']:+,.0f} €, {tr('service risk')} {k['service_risk_delta']:+,.0f} €, {tr('action changes')} {k['action_changes']}.")
+                lines += [f"- **{r['SKU']}** → {r['Change_Classification']} · {tr('coverage')} {r['Days_Cover_Delta']:+.1f}d · {tr('purchase')} {r['Purchase_Value_Delta']:+,.0f} € · {r['Change_Reason']}" for r in tool["rows"][:8]]
     return "\n".join(lines)
-
 
 def build_context(a):
     cols = [
@@ -2266,9 +2291,9 @@ def _openai_error_info(exc):
 
 def test_openai_connection(api_key, model):
     if not api_key:
-        return False, "No hay API key configurada.", {}
+        return False, ("No OPENAI_API_KEY configured." if st.session_state.get("language", "English") == "English" else "No hay API key configurada."), {}
     if OpenAI is None:
-        return False, "La librería OpenAI no está instalada.", {}
+        return False, ("The OpenAI library is not installed." if st.session_state.get("language", "English") == "English" else "La librería OpenAI no está instalada."), {}
 
     try:
         client = _make_openai_client(api_key)
@@ -2279,7 +2304,7 @@ def test_openai_connection(api_key, model):
         # Small Responses API smoke test.
         response = client.responses.create(
             model=model,
-            input="Responde únicamente: conexión OK"
+            input=("Respond only: connection OK" if st.session_state.get("language", "English") == "English" else "Responde únicamente: conexión OK")
         )
         return True, response.output_text, {}
 
@@ -2304,17 +2329,25 @@ def ai_chat(question, a, api_key=None, model="gpt-5.6-luna", comparison=None, co
         response = client.responses.create(
             model=model,
             instructions=(
-                "Eres un agente senior de Supply Chain. Responde en español y de forma operativa. "
-                "Usa los resultados estructurados de las herramientas. No inventes números. "
-                "No ejecutes compras. Para compras distingue BUY_NOW de CONFIRM_PO. "
-                "Si existe PO abierta, confirma su adecuación antes de recomendar una nueva compra. "
-                "Para exceso cuantifica el valor de inventario potencialmente liberable. "
-                "Para servicio cuantifica unidades y valor expuesto. "
-                "Para proveedores explica concentración de riesgo. "
-                "Para forecast señala cambios que puedan modificar decisiones. "
-                "Para KPIs logísticos usa la herramienta logistics_kpis y distingue claramente cobertura de lead time de OTIF/fill rate. "
-                "Para comparación explica qué ha mejorado, empeorado o cambiado de acción entre periodos y cuantifica los deltas. "
-                "En preguntas ejecutivas: Resumen → Top 3 prioridades → Acciones → Riesgos/Supuestos."
+                (
+                    "You are a senior Supply Chain agent. Respond in English and operationally. "
+                    "Use the structured tool results. Do not invent numbers. Do not execute purchases. "
+                    "For purchasing distinguish BUY_NOW from CONFIRM_PO. If an open PO exists, validate its adequacy before recommending a new purchase. "
+                    "For excess quantify potentially releasable inventory value. For service quantify exposed units and value. "
+                    "For suppliers explain risk concentration. For forecast highlight changes that may alter decisions. "
+                    "For logistics KPIs use the logistics_kpis tool and clearly distinguish lead-time coverage from OTIF/fill rate. "
+                    "For comparisons explain what improved, worsened or changed action between periods and quantify deltas. "
+                    "For executive questions use: Summary → Top 3 priorities → Actions → Risks/Assumptions."
+                ) if st.session_state.get("language", "English") == "English" else (
+                    "Eres un agente senior de Supply Chain. Responde en español y de forma operativa. "
+                    "Usa los resultados estructurados de las herramientas. No inventes números. No ejecutes compras. "
+                    "Para compras distingue BUY_NOW de CONFIRM_PO. Si existe una PO abierta, confirma su adecuación antes de recomendar una nueva compra. "
+                    "Para exceso cuantifica el valor de inventario potencialmente liberable. Para servicio cuantifica unidades y valor expuesto. "
+                    "Para proveedores explica la concentración de riesgo. Para forecast señala cambios que puedan modificar decisiones. "
+                    "Para KPIs logísticos usa la herramienta logistics_kpis y distingue claramente cobertura de lead time de OTIF/fill rate. "
+                    "Para comparación explica qué ha mejorado, empeorado o cambiado de acción entre periodos y cuantifica los deltas. "
+                    "En preguntas ejecutivas: Resumen → Top 3 prioridades → Acciones → Riesgos/Supuestos."
+                )
             ),
             input=f"PREGUNTA:\\n{question}\\n\\nHERRAMIENTAS:\\n{tool_results}\\n\\nDATASET:\\n{context}"
         )
@@ -2357,7 +2390,7 @@ if "language" not in st.session_state:
 
 _TRANSLATIONS = {
     "Spanish": {
-        "Decision Intelligence for planners · V2.0.8": "Inteligencia de decisiones para planners · V2.0.8",
+        "Decision Intelligence for planners · V2.0.9": "Inteligencia de decisiones para planners · V2.0.9",
         "Historical demand and inventory": "Histórico de demanda e inventario",
         "Upload historical demand and inventory data for analysis. CSV and Excel are supported.": "Carga datos históricos de demanda e inventario para ejecutar el análisis. Se admiten CSV y Excel.",
         "Safety stock floor (days)": "Stock de seguridad mínimo (días)",
@@ -2439,6 +2472,149 @@ def tr(text):
         return _TRANSLATIONS["Spanish"].get(str(text), str(text))
     return str(text)
 
+# Complete UI vocabulary for the bilingual interface. Calculations remain language-neutral.
+_TRANSLATIONS["Spanish"].update({
+    "The API key is never displayed in full or stored in GitHub.": "La API key nunca se muestra completa ni se guarda en GitHub.",
+    "❌ Unable to validate the connection.": "❌ No se pudo validar la conexión.",
+    "✅ OpenAI connected": "✅ OpenAI conectado",
+    "⚙️ Planning assumptions": "⚙️ Parámetros de planificación",
+    "🔄 Period comparison": "🔄 Comparación de periodos",
+    "days": "días",
+    "Current": "Actual", "Previous": "Anterior",
+    "From raw supply-chain data to prioritized decisions · V2.0.9": "De datos brutos de supply chain a decisiones priorizadas · V2.0.9",
+    "🔴 Critical": "🔴 Crítico", "🟠 Review": "🟠 Revisar", "🛒 Purchase need": "🛒 Necesidad de compra",
+    "💰 Inventory": "💰 Inventario", "📈 Next month": "📈 Próximo mes",
+    "Critical inventory exposure": "Exposición de inventario crítico",
+    "Excess inventory": "Exceso de inventario", "Immediate actions": "Acciones inmediatas",
+    "Service risk": "Riesgo de servicio", "Excess exposure": "Exposición de exceso",
+    "Median PO cover": "Cobertura media de pedidos", "Top supplier risk": "Mayor riesgo de proveedor",
+    "🔴 Explain critical SKUs": "🔴 Explicar SKUs críticos",
+    "🛒 Explain purchase plan": "🛒 Explicar plan de compras",
+    "⚠️ Explain service risk": "⚠️ Explicar riesgo de servicio",
+    "💰 Inventory value": "💰 Valor de inventario", "🔄 Inventory turns": "🔄 Rotación de inventario",
+    "📦 Days of cover": "📦 Días de cobertura", "🟢 Lead-time coverage": "🟢 Cobertura del lead time",
+    "🔴 Critical SKUs": "🔴 SKUs críticos", "⚠️ Service risk": "⚠️ Riesgo de servicio",
+    "🟡 Excess inventory": "🟡 Exceso de inventario", "🛒 Purchase requirement": "🛒 Necesidad de compra",
+    "📨 Open PO value": "📨 Valor de pedidos abiertos", "🚚 Avg lead time": "🚚 Lead time medio",
+    "🏭 Suppliers": "🏭 Proveedores", "📈 Next-month forecast": "📈 Forecast del próximo mes",
+    "📊 Explain KPI health": "📊 Explicar salud de KPIs", "🚚 Supplier exposure": "🚚 Exposición por proveedor",
+    "💰 Working capital": "💰 Capital circulante", "Purchase exposure": "Exposición de compras",
+    "Risk addressed": "Riesgo abordado", "Blocked exposure": "Exposición bloqueada",
+    "Explain the recommended action for": "Explicar la acción recomendada para",
+    "Purchase need": "Necesidad de compra", "Required stock value": "Valor de stock requerido",
+    "Rows": "Filas", "SKUs": "SKUs", "Suppliers": "Proveedores", "Warnings": "Avisos", "Critical": "Crítico",
+    "Actions": "Acciones", "Immediate": "Inmediatas", "Purchase value": "Valor de compra",
+    "Generate supplier communication": "Generar comunicación al proveedor",
+    "🤖 Your Supply Chain Copilot": "🤖 Tu Supply Chain Copilot",
+    "### ⚡ Quick analyses": "### ⚡ Análisis rápidos",
+    "🛒 Purchase priorities": "🛒 Prioridades de compra", "💰 Reduce inventory": "💰 Reducir inventario",
+    "🚚 Supplier risk": "🚚 Riesgo de proveedores", "📈 Demand outlook": "📈 Perspectiva de demanda",
+    "🔄 What changed?": "🔄 ¿Qué ha cambiado?", "📊 Logistics KPIs": "📊 KPIs logísticos",
+    "🤖 Ask your Supply Chain Copilot": "🤖 Pregunta a tu Supply Chain Copilot",
+    "Examples: “What should I buy this week?”, “Where is my biggest stockout risk?”, “Which suppliers need attention?”": "Ejemplos: «¿Qué debería comprar esta semana?», «¿Dónde está mi mayor riesgo de rotura de stock?», «¿Qué proveedores requieren atención?»",
+    "Ask a supply-chain question…": "Haz una pregunta de supply chain…",
+    "📤 Reporting Center": "📤 Centro de informes",
+    "Purchase requirement": "Necesidad de compra", "Actions": "Acciones",
+    "### 1. Executive Report": "### 1. Informe ejecutivo",
+    "Same executive KPIs and priorities, with editable tables, formatting and charts in Excel.": "Los mismos KPIs ejecutivos y prioridades, con tablas editables, formato y gráficos en Excel.",
+    "The Excel workbook mirrors the detailed reports and adds a Change Monitor sheet.": "El libro de Excel replica los informes detallados y añade una hoja de Monitor de cambios.",
+    "### 4. Planning Agent": "### 4. Agente de planificación",
+    "### 5. Complete Management Pack": "### 5. Pack completo de gestión",
+    "The Excel pack combines the executive dashboard, detailed report sheets, Change Monitor and normalized source data in one workbook.": "El pack de Excel combina el dashboard ejecutivo, las hojas de informes detallados, el Monitor de cambios y los datos fuente normalizados en un único libro.",
+    "Raw CSV exports remain removed from the reporting workflow. HTML and Excel are now the primary shareable outputs.": "Las exportaciones CSV siguen fuera del flujo de reporting. HTML y Excel son ahora los principales formatos compartibles.",
+    "HTML and Excel contain the same Change Monitor analysis: KPIs, period deltas, top changes, classification and reasons.": "HTML y Excel contienen el mismo análisis del Monitor de cambios: KPIs, variaciones por periodo, principales cambios, clasificación y motivos.",
+    "▶️ Run prepared analysis": "▶️ Ejecutar análisis preparado", "✖️ Clear prepared analysis": "✖️ Limpiar análisis preparado",
+    "📗 Export Decision Center to Excel": "📗 Exportar Centro de decisiones a Excel",
+    "📗 Export Logistics KPI Dashboard to Excel": "📗 Exportar Dashboard de KPIs logísticos a Excel",
+    "📊 Planning Agent Report (HTML)": "📊 Informe del Agente de planificación (HTML)",
+    "📗 Planning Agent Report (Excel)": "📗 Informe del Agente de planificación (Excel)",
+    "📗 Export Inventory to Excel": "📗 Exportar Inventario a Excel", "📗 Export Forecast to Excel": "📗 Exportar Forecast a Excel",
+    "📗 Export ABC/XYZ to Excel": "📗 Exportar ABC/XYZ a Excel", "📗 Export Suppliers to Excel": "📗 Exportar Proveedores a Excel",
+    "🌐 Data Quality Report (HTML)": "🌐 Informe de calidad de datos (HTML)", "📗 Data Quality Report (Excel)": "📗 Informe de calidad de datos (Excel)",
+    "Action": "Acción", "Owner": "Responsable", "Deadline": "Fecha límite",
+    "⬇️ Download supplier message": "⬇️ Descargar mensaje al proveedor",
+    "🌐 Download Action Plan Report (HTML)": "🌐 Descargar informe del Plan de acción (HTML)",
+    "📗 Download Action Plan Report (Excel)": "📗 Descargar informe del Plan de acción (Excel)",
+    "Purchase requirement": "Necesidad de compra", "Action changes": "Cambios de acción",
+    "📤 Export Change Monitor": "📤 Exportar Monitor de cambios",
+    "📊 Download Change Monitor Report (HTML)": "📊 Descargar informe del Monitor de cambios (HTML)",
+    "📗 Download Change Monitor Report (Excel)": "📗 Descargar informe del Monitor de cambios (Excel)",
+    "Top worsened / watch": "Principales empeoramientos / vigilancia", "Top improved": "Principales mejoras",
+    "Changes": "Cambios",
+    "📊 Executive Report (HTML)": "📊 Informe ejecutivo (HTML)", "📗 Executive Report (Excel)": "📗 Informe ejecutivo (Excel)",
+    "📊 Inventory & Service Risk (HTML)": "📊 Inventario y riesgo de servicio (HTML)",
+    "🛒 Purchase Plan (HTML)": "🛒 Plan de compras (HTML)", "🚚 Supplier Risk (HTML)": "🚚 Riesgo de proveedores (HTML)",
+    "📝 Weekly Action Plan (HTML)": "📝 Plan de acción semanal (HTML)", "🧹 Data Quality (HTML)": "🧹 Calidad de datos (HTML)",
+    "📗 Detailed Reports (Excel)": "📗 Informes detallados (Excel)", "🔄 Change Monitor Report (HTML)": "🔄 Informe del Monitor de cambios (HTML)",
+    "📦 Management Pack (ZIP)": "📦 Pack de gestión (ZIP)", "📗 Complete Management Pack (Excel)": "📗 Pack completo de gestión (Excel)",
+    "There are more unfavorable changes": "Hay más cambios desfavorables", "than favorable changes": "que favorables",
+    "The evolution is mostly favorable": "La evolución es mayoritariamente favorable", "improved": "mejorados",
+    "versus": "frente a", "worsened": "empeorados",
+    "The evolution is balanced between improvements and deteriorations.": "La evolución está equilibrada entre mejoras y empeoramientos.",
+    "Running Supply Chain analysis...": "Ejecutando análisis de Supply Chain...",
+    "Analyzing...": "Analizando...",
+    "The MVP forecast uses a weighted average of the last 6 months plus a linear trend. The next iteration can add seasonality, intermittent demand and alternative models.": "El forecast del MVP utiliza una media ponderada de los últimos 6 meses más una tendencia lineal. La siguiente iteración puede añadir estacionalidad, demanda intermitente y modelos alternativos.",
+    "HTML and Excel use the current filtered view. HTML includes KPIs and an executive presentation; Excel includes Summary, Action Plan and Supplier Summary with filters.": "HTML y Excel utilizan la vista filtrada actual. HTML incluye KPIs y una presentación ejecutiva; Excel incluye Summary, Action Plan y Supplier Summary con filtros.",
+    "Need at least two historical periods to compare evolution.": "Se necesitan al menos dos periodos históricos para comparar la evolución.",
+    "📦 Supply Chain AI Copilot V2.0.9 — recommendations require planner validation before execution.": "📦 Supply Chain AI Copilot V2.0.9 — las recomendaciones requieren validación del planner antes de su ejecución.",
+    "Supply Chain AI Copilot V2.0.9 — recommendations require planner validation before execution.": "Supply Chain AI Copilot V2.0.9 — las recomendaciones requieren validación del planner antes de su ejecución.",
+    "Safety stock floor": "Stock de seguridad mínimo", "Service level target": "Objetivo de nivel de servicio",
+    "Language": "Idioma", "rows": "filas", "suppliers": "proveedores", "units": "unidades", "Fingerprint": "Huella",
+    "Executive": "Ejecutivo", "Action Plan": "Plan de acción", "Data Quality": "Calidad de datos", "Inventory Risk": "Riesgo de inventario",
+    "Purchase Plan": "Plan de compras", "Supplier Risk": "Riesgo de proveedores", "Planning Agent": "Agente de planificación",
+    "Change Monitor": "Monitor de cambios", "Summary": "Resumen", "Quality Checks": "Comprobaciones de calidad", "Priorities": "Prioridades",
+    "Purchase Plan": "Plan de compras", "Supplier Summary": "Resumen de proveedores", "KPI Catalogue": "Catálogo de KPIs",
+    "Monthly Trend": "Tendencia mensual", "Supplier Exposure": "Exposición por proveedor", "ABC XYZ": "ABC XYZ", "Lead Time Profile": "Perfil de lead time",
+    "Inventory Health": "Salud del inventario", "Demand Outlook": "Perspectiva de demanda", "Normalized Data": "Datos normalizados", "Source Data": "Datos fuente",
+    "Excel export unavailable": "Exportación a Excel no disponible", "Prepared analysis": "Análisis preparado",
+    "### Priorities for this week": "### Prioridades de esta semana",
+    "| Priority | SKU | Action | Timing | Quantity | Risk | Confidence |": "| Prioridad | SKU | Acción | Timing | Cantidad | Riesgo | Confianza |",
+    "Buy now": "Comprar ahora", "Confirm PO": "Confirmar PO", "Do not buy": "No comprar", "Review": "Revisar", "Monitor": "Monitorizar",
+    "cover": "cobertura", "Total recommended purchase": "Compra recomendada total", "Current excess inventory": "Inventario actualmente en exceso",
+    "**Immediate action:** issue/validate orders for `BUY_NOW` SKUs and confirm the delivery date with the supplier.": "**Acción inmediata:** emitir/validar pedidos de los SKUs `BUY_NOW` y confirmar la fecha de entrega con el proveedor.",
+    "Explain the 5 most critical SKUs, what is driving the risk and which action should be reviewed first.": "Explica los 5 SKUs críticos más importantes, qué está provocando el riesgo y qué acción debería revisarse primero.",
+    "Explain the current purchase plan, which suppliers concentrate the most value and what the purchase priorities are.": "Explica el plan de compras actual, qué proveedores concentran más valor y cuáles son las prioridades de compra.",
+    "Explain where service risk is concentrated and which actions could reduce it without creating unnecessary purchases.": "Explica dónde está concentrado el riesgo de servicio y qué acciones podrían reducirlo sin generar compras innecesarias.",
+    "Analyze the health of the main logistics KPIs, identify the signals that require attention and explain their causes.": "Analiza la salud de los principales KPIs logísticos, identifica las señales que requieren atención y explica sus causas.",
+    "Analyze supplier exposure and tell me where the planner should focus attention.": "Analiza la exposición por proveedor y dime dónde debería concentrar la atención del planner.",
+    "Analyze inventory, excess, coverage and recommended purchases from a working-capital perspective.": "Analiza inventario, exceso, cobertura y compras recomendadas desde la perspectiva de capital circulante.",
+    "What should I buy this week and what are the 3 most important priorities?": "¿Qué debería comprar esta semana y cuáles son las 3 prioridades más importantes?",
+    "Where can I reduce inventory without materially increasing service risk?": "¿Dónde puedo reducir inventario sin aumentar demasiado el riesgo de servicio?",
+    "Which suppliers require the most attention and why?": "¿Qué proveedores requieren más atención y por qué?",
+    "What demand changes could alter my purchase decisions?": "¿Qué cambios de demanda pueden cambiar mis decisiones de compra?",
+    "What changed between the latest period and the previous one, and what are the 3 largest variations?": "¿Qué ha cambiado entre el último periodo y el anterior y cuáles son las 3 mayores variaciones?",
+    "What is the state of the main logistics KPIs and which ones require attention?": "¿Cuál es el estado de los principales KPI logísticos y cuáles requieren atención?",
+    "Comparing": "Comparando",
+    "## Supply Chain Agent — analysis": "## Supply Chain Agent — análisis",
+    "turns": "rotación", "aggregate cover": "cobertura agregada", "lead-time coverage": "cobertura de lead time",
+    "excess": "exceso", "open POs": "PO abiertas", "recommended purchase": "compra recomendada",
+    "Recommended purchase": "Compra recomendada", "lines": "líneas", "critical": "críticas", "units": "uds",
+    "Estimated excess": "Exceso estimado", "across": "en", "Service exposure": "Exposición de servicio",
+    "service risk lower": "riesgo de servicio", "Largest demand increases:": "Mayores subidas de demanda:",
+    "forecast": "forecast", "Execution plan": "Plan de ejecución", "immediate actions": "acciones inmediatas",
+    "purchase exposure": "exposición de compra", "service risk potentially addressable": "riesgo de servicio potencialmente abordable",
+    "Step": "Paso", "No comparable periods are available.": "No hay periodos comparables disponibles.",
+    "Comparison": "Comparación", "action changes": "cambios de acción", "coverage": "cobertura",
+    "OpenAI authentication failed": "Autenticación de OpenAI fallida", "OpenAI rate limit reached": "Límite/cuota de OpenAI alcanzado",
+    "OpenAI error": "Error de OpenAI", "Agent error": "Error del agente", "unknown": "desconocido",
+})
+
+
+# Translate exact user-facing labels automatically; complex HTML/Markdown is left untouched unless it is a known phrase.
+for _method_name in [
+    "title", "header", "subheader", "caption", "write", "info", "warning", "error", "success",
+    "button", "download_button", "selectbox", "multiselect", "radio", "slider", "number_input",
+    "text_input", "text_area", "file_uploader", "chat_input", "expander", "markdown", "spinner"
+]:
+    _original_method = getattr(st, _method_name, None)
+    if _original_method is not None and not getattr(_original_method, "_sc_i18n_wrapped", False):
+        def _make_i18n_wrapper(_fn):
+            def _wrapped(label, *args, **kwargs):
+                return _fn(tr(label), *args, **kwargs)
+            _wrapped._sc_i18n_wrapped = True
+            return _wrapped
+        setattr(st, _method_name, _make_i18n_wrapper(_original_method))
+
 # Display labels for dataframes. Calculations always keep the canonical English field names.
 _COLUMN_TRANSLATIONS_ES = {
     "SKU":"SKU", "Description":"Descripción", "Supplier":"Proveedor", "Status":"Estado",
@@ -2465,6 +2641,27 @@ def localize_df(df):
         return df
     out = df.copy()
     out.columns = [_COLUMN_TRANSLATIONS_ES.get(str(c), str(c)) for c in out.columns]
+    value_maps = {
+        "Status": {"🔴 CRITICAL":"🔴 CRÍTICO", "🟠 REVIEW":"🟠 REVISAR", "🟡 EXCESS":"🟡 EXCESO", "🟢 OK":"🟢 OK"},
+        "Action": {"BUY_NOW":"COMPRAR AHORA", "CONFIRM_PO":"CONFIRMAR PO", "DO_NOT_BUY":"NO COMPRAR", "REVIEW":"REVISAR", "MONITOR":"MONITORIZAR", "BUY NOW":"COMPRAR", "BUY":"COMPRAR", "CONFIRM OPEN PO":"CONFIRMAR PO", "REVIEW REPLENISHMENT POLICY":"REVISAR POLÍTICA DE REPOSICIÓN", "BLOCK NEW REPLENISHMENT":"BLOQUEAR NUEVA REPOSICIÓN"},
+        "Owner": {"Planner":"Planner", "Planner / Buyer":"Planner / Comprador"},
+        "Deadline": {"Today":"Hoy", "This week":"Esta semana", "Next cycle":"Próximo ciclo", "Immediate":"Inmediato", "Routine":"Rutina"},
+        "Change_Classification": {"WORSENED":"EMPEORADO", "IMPROVED":"MEJORADO", "WATCH":"VIGILAR", "STABLE":"ESTABLE"},
+        "Category": {"Completeness":"Completitud", "Validity":"Validez", "Consistency":"Consistencia", "Uniqueness":"Unicidad"},
+        "Check": {"Missing values":"Valores ausentes", "Negative values":"Valores negativos", "Month range":"Rango de meses", "Duplicate SKU-period":"SKU-periodo duplicado", "Blank SKU":"SKU vacío", "Blank Supplier":"Proveedor vacío"},
+        "Action_Timing": {"Immediate":"Inmediato", "Today":"Hoy", "This week":"Esta semana", "Next cycle":"Próximo ciclo", "Routine":"Rutina", "Monitor":"Monitorizar"},
+    }
+    for canonical_col, mapping in value_maps.items():
+        display_col = _COLUMN_TRANSLATIONS_ES.get(canonical_col, canonical_col)
+        if canonical_col in df.columns and display_col in out.columns:
+            def _map_value(v):
+                sv = str(v)
+                if canonical_col == "Action":
+                    for en, es in mapping.items():
+                        if sv.startswith(en):
+                            return sv.replace(en, es, 1)
+                return mapping.get(sv, v)
+            out[display_col] = out[display_col].map(_map_value)
     return out
 
 # Keep calculations in canonical English while presenting tables and common controls in the selected language.
@@ -2508,9 +2705,9 @@ div[data-testid="stExpander"] { border-radius: 12px; }
 # -----------------------------
 with st.sidebar:
     st.markdown("## 📦 Supply Chain AI")
-    st.caption(tr("Decision Intelligence for planners · V2.0.8"))
+    st.caption(tr("Decision Intelligence for planners · V2.0.9"))
 
-    language_choice = st.selectbox("🌐 Language / Idioma", ["English", "Español"], index=0 if st.session_state.language == "English" else 1, key="language_selector")
+    language_choice = st.selectbox(f"🌐 {tr('Language')}", ["English", "Español"], index=0 if st.session_state.language == "English" else 1, key="language_selector")
     st.session_state.language = "English" if language_choice == "English" else "Spanish"
 
     uploaded = st.file_uploader(
@@ -2549,7 +2746,7 @@ with st.sidebar:
         prefix = stored_key[:8] if len(stored_key) >= 8 else stored_key
         suffix = stored_key[-4:] if len(stored_key) >= 4 else ""
         st.success(tr(f"API key detected · {source}"))
-        st.caption(f"Fingerprint: `{prefix}…{suffix}`")
+        st.caption(f"{tr('Fingerprint')}: `{prefix}…{suffix}`")
     else:
         st.warning(tr("No OPENAI_API_KEY configured. Local mode will be used."))
 
@@ -2571,9 +2768,9 @@ with st.sidebar:
         ok, message, details = test_openai_connection(effective_key, model)
 
         if ok:
-            st.success(f"✅ OpenAI conectado: {message}")
+            st.success(f"{tr('✅ OpenAI connected')}: {message}")
         else:
-            st.error("❌ No se pudo validar la conexión.")
+            st.error(tr("❌ Unable to validate the connection."))
             if details:
                 st.code(
                     f"HTTP: {details.get('http_status')}\n"
@@ -2587,7 +2784,7 @@ with st.sidebar:
                 st.code(message, language="text")
 
     st.caption(
-        "La API key nunca se muestra completa ni se guarda en GitHub."
+        tr("The API key is never displayed in full or stored in GitHub.")
     )
 
     if st.button(tr("🔄 Load demo")):
@@ -2613,10 +2810,10 @@ def _excel_tab_export_bytes(title, sheets, kpis=None):
         number_fmt = wb.add_format({"num_format": '#,##0.00', "valign": "top"})
 
         # Executive summary sheet
-        summary = wb.add_worksheet("Summary")
+        summary = wb.add_worksheet(tr("Summary"))
         summary.hide_gridlines(2)
         summary.write(0, 0, title, title_fmt)
-        summary.write(1, 0, "Exported from Supply Chain AI Copilot V2.0.8", subtitle_fmt)
+        summary.write(1, 0, "Exported from Supply Chain AI Copilot V2.0.9", subtitle_fmt)
         if kpis:
             summary.write(3, 0, "Key metrics", header_fmt)
             for i, (label, value) in enumerate(kpis.items(), start=4):
@@ -2728,7 +2925,7 @@ else:
 # -----------------------------
 with st.sidebar:
     st.markdown(f"### 📁 {tr('Current dataset')}")
-    st.caption(f"{len(raw):,} rows · {a['SKU'].nunique():,} SKUs · {a['Supplier'].nunique():,} suppliers")
+    st.caption(f"{len(raw):,} {tr('rows')} · {a['SKU'].nunique():,} SKUs · {a['Supplier'].nunique():,} {tr('suppliers')}")
     if available_periods:
         st.caption(f"{tr('Period')}: **{available_periods[0]} → {available_periods[-1]}**")
     if K["critical"] > 0:
@@ -2736,13 +2933,13 @@ with st.sidebar:
     else:
         st.success(tr("No critical SKUs under the current planning parameters."))
 
-    with st.expander("⚙️ Planning assumptions" if st.session_state.language == "English" else "⚙️ Parámetros de planificación"):
-        st.caption(f"{tr('Safety stock floor')}: **{safety_days} days**")
+    with st.expander(tr("⚙️ Planning assumptions")):
+        st.caption(f"{tr('Safety stock floor')}: **{safety_days} {tr('days')}**")
         st.caption(f"{tr('Service level target')}: **{service:.1%}**")
         st.caption(tr("These parameters affect safety stock, coverage and purchase recommendations."))
 
     if len(available_periods) >= 2:
-        with st.expander("🔄 Period comparison" if st.session_state.language == "English" else "🔄 Comparación de periodos", expanded=False):
+        with st.expander(tr("🔄 Period comparison"), expanded=False):
             selected_current = st.selectbox(
                 tr("Current period"),
                 available_periods,
@@ -2757,7 +2954,7 @@ with st.sidebar:
                 index=prev_options.index(default_previous) if default_previous in prev_options else len(prev_options)-1,
                 key="change_previous_period"
             )
-            st.caption(f"Current: {selected_current} · Previous: {selected_previous}" if st.session_state.language == "English" else f"Actual: {selected_current} · Anterior: {selected_previous}")
+            st.caption(f"{tr('Current')}: {selected_current} · {tr('Previous')}: {selected_previous}")
 
 # Add/refresh forecast change vs historical monthly average
 a["Forecast_Change_Pct"] = np.where(
@@ -2770,7 +2967,7 @@ a["Forecast_Change_Pct"] = np.where(
 # Header
 # -----------------------------
 st.title("📦 Supply Chain AI Copilot")
-st.caption("From raw supply-chain data to prioritized decisions · V2.0.8" if st.session_state.language == "English" else "De datos brutos de supply chain a decisiones priorizadas · V2.0.8")
+st.caption(tr("From raw supply-chain data to prioritized decisions · V2.0.9"))
 
 c1,c2,c3,c4,c5,c6 = st.columns(6)
 c1.metric("SKUs", K["sku"])
@@ -2824,11 +3021,7 @@ with tabs[0]:
     m3.metric("Immediate actions", int((a["Action"].isin(["BUY_NOW","CONFIRM_PO"])).sum()))
 
     st.subheader(tr("Why these actions?"))
-    st.info(
-        "The engine treats a SKU as BUY_NOW when on-hand stock is below lead-time demand. "
-        "REVIEW/CONFIRM_PO cases are handled separately to avoid double ordering when an open PO already exists. "
-        "DO_NOT_BUY cases are flagged when coverage is materially above the policy threshold."
-    )
+    st.info(tr("The engine treats a SKU as BUY_NOW when on-hand stock is below lead-time demand. REVIEW/CONFIRM_PO cases are handled separately to avoid double ordering when an open PO already exists. DO_NOT_BUY cases are flagged when coverage is materially above the policy threshold."))
 
     c1, c2, c3, c4 = st.columns(4)
     service_risk_value = float(a.get("Service_Risk_Value", pd.Series(0, index=a.index)).sum())
@@ -2851,11 +3044,11 @@ with tabs[0]:
     st.markdown(f"#### 🤖 {tr('Continue with Copilot')}")
     dcq1, dcq2, dcq3 = st.columns(3)
     if dcq1.button("🔴 Explain critical SKUs", use_container_width=True, key="dc_critical_copilot"):
-        st.session_state.copilot_prefill = "Explica los 5 SKUs críticos más importantes, qué está provocando el riesgo y qué acción debería revisar primero."
+        st.session_state.copilot_prefill = tr("Explain the 5 most critical SKUs, what is driving the risk and which action should be reviewed first.")
     if dcq2.button("🛒 Explain purchase plan", use_container_width=True, key="dc_purchase_copilot"):
-        st.session_state.copilot_prefill = "Explica el purchase plan actual, qué proveedores concentran más valor y cuáles son las prioridades de compra."
+        st.session_state.copilot_prefill = tr("Explain the current purchase plan, which suppliers concentrate the most value and what the purchase priorities are.")
     if dcq3.button("⚠️ Explain service risk", use_container_width=True, key="dc_service_copilot"):
-        st.session_state.copilot_prefill = "Explica dónde está concentrado el service risk y qué acciones podrían reducirlo sin generar compras innecesarias."
+        st.session_state.copilot_prefill = tr("Explain where service risk is concentrated and which actions could reduce it without creating unnecessary purchases.")
     if st.session_state.get("copilot_prefill"):
         st.info(tr("Prepared question for Copilot. Go to the 🤖 Copilot tab to run it."))
 
@@ -2910,7 +3103,7 @@ with tabs[1]:
     r3[0].metric("📨 Open PO value", f"€{m['open_po_value']:,.0f}")
     r3[1].metric("🚚 Avg lead time", f"{m['avg_lead_time']:.1f}d")
     r3[2].metric("🏭 Suppliers", int(a["Supplier"].nunique()))
-    r3[3].metric("📈 Next-month forecast", f"{a['Forecast_Next_Month'].sum():,.0f} units")
+    r3[3].metric(tr("📈 Next-month forecast"), f"{a['Forecast_Next_Month'].sum():,.0f} {tr('units')}")
 
     st.divider()
 
@@ -2974,11 +3167,11 @@ with tabs[1]:
     st.markdown(f"#### 🤖 {tr('Investigate with Copilot')}")
     kq1, kq2, kq3 = st.columns(3)
     if kq1.button("📊 Explain KPI health", use_container_width=True, key="kpi_health_copilot"):
-        st.session_state.copilot_prefill = "Analiza la salud de los principales KPI logísticos, identifica las señales que requieren atención y explica sus causas."
+        st.session_state.copilot_prefill = tr("Analyze the health of the main logistics KPIs, identify the signals that require attention and explain their causes.")
     if kq2.button("🚚 Supplier exposure", use_container_width=True, key="kpi_supplier_copilot"):
-        st.session_state.copilot_prefill = "Analiza la exposición por proveedor y dime dónde debería concentrar la atención del planner."
+        st.session_state.copilot_prefill = tr("Analyze supplier exposure and tell me where the planner should focus attention.")
     if kq3.button("💰 Working capital", use_container_width=True, key="kpi_wc_copilot"):
-        st.session_state.copilot_prefill = "Analiza inventario, exceso, cobertura y compras recomendadas desde la perspectiva de working capital."
+        st.session_state.copilot_prefill = tr("Analyze inventory, excess, coverage and recommended purchases from a working-capital perspective.")
     if st.session_state.get("copilot_prefill"):
         st.info(tr("Prepared question for Copilot. Go to the 🤖 Copilot tab to run it."))
 
@@ -3071,7 +3264,7 @@ with tabs[2]:
             planning_xlsx = _excel_planning_agent_bytes(planning, planning_meta)
         except Exception as planning_exc:
             planning_xlsx = None
-            st.warning(f"Excel export unavailable: {planning_exc}")
+            st.warning(f"{tr('Excel export unavailable')}: {planning_exc}")
         if planning_xlsx:
             st.download_button(
                 "📗 Planning Agent Report (Excel)",
@@ -3125,10 +3318,7 @@ with tabs[4]:
     if forecast_export:
         st.download_button("📗 Export Forecast to Excel", forecast_export, "forecast_export.xlsx",
                            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True, key="forecast_excel")
-    st.info(
-        "El forecast del MVP utiliza una media ponderada de los últimos 6 meses más una tendencia lineal. "
-        "La siguiente iteración puede añadir estacionalidad, demanda intermitente y modelos alternativos."
-    )
+    st.info(tr("The MVP forecast uses a weighted average of the last 6 months plus a linear trend. The next iteration can add seasonality, intermittent demand and alternative models."))
 
 # -----------------------------
 # ABC/XYZ
@@ -3177,7 +3367,7 @@ with tabs[7]:
     st.caption(tr("Simulate decisions before changing the policy."))
     s1, s2 = st.columns(2)
     with s1:
-        sim_safety = st.slider("Safety stock floor", 0, 90, safety_days, key="sim_safety")
+        sim_safety = st.slider(tr("Safety stock floor"), 0, 90, safety_days, key="sim_safety")
     with s2:
         sim_lead = st.slider(tr("Lead time multiplier"), .5, 2.0, 1.0, .05, key="sim_lead")
 
@@ -3209,7 +3399,7 @@ def _excel_data_quality_bytes(raw, dq):
     integer_fmt = wb.add_format({"num_format": "#,##0", "valign": "top"})
 
     summary = data_quality_summary(raw, dq)
-    ws = wb.add_worksheet("Summary")
+    ws = wb.add_worksheet(tr("Summary"))
     ws.hide_gridlines(2)
     ws.merge_range("A1:F1", "Supply Chain AI — Data Quality Report", title)
     ws.write("A2", f"Latest period: {summary['latest_period']} · {summary['rows']:,} rows · {summary['skus']:,} SKUs · {summary['suppliers']:,} suppliers", subtitle)
@@ -3227,7 +3417,7 @@ def _excel_data_quality_bytes(raw, dq):
     ws.merge_range(8, 0, 8, 5, status_text, status_fmt)
     ws.set_row(8, 24)
 
-    detail = wb.add_worksheet("Quality Checks")
+    detail = wb.add_worksheet(tr("Quality Checks"))
     detail.hide_gridlines(2)
     detail.write_row(0, 0, ["Category", "Check", "Status", "Count", "Details"], header)
     for r, row in enumerate(dq[["Category","Check","Status","Count","Details"]].itertuples(index=False, name=None), 1):
@@ -3294,7 +3484,7 @@ with tabs[8]:
             dq_excel = _excel_data_quality_bytes(raw, dq)
         except Exception as dq_exc:
             dq_excel = None
-            st.warning(f"Excel export unavailable: {dq_exc}")
+            st.warning(f"{tr('Excel export unavailable')}: {dq_exc}")
         if dq_excel:
             st.download_button(
                 "📗 Data Quality Report (Excel)",
@@ -3406,17 +3596,17 @@ with tabs[9]:
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True, key="action_plan_excel"
             )
-    st.caption("HTML y Excel utilizan la vista filtrada actual. El HTML incluye KPIs y una presentación ejecutiva; el Excel incluye Summary, Action Plan y Supplier Summary con filtros.")
+    st.caption(tr("HTML and Excel use the current filtered view. HTML includes KPIs and an executive presentation; Excel includes Summary, Action Plan and Supplier Summary with filters."))
 
 # -----------------------------
 # Change Monitor
 # -----------------------------
 with tabs[10]:
-    st.subheader("🔄 What changed?")
+    st.subheader(tr("🔄 What changed?"))
     if not comparison_meta.get("has_comparison"):
-        st.info("Necesitas al menos dos periodos históricos para comparar la evolución.")
+        st.info(tr("Need at least two historical periods to compare evolution."))
     else:
-        st.caption(f"Comparando **{comparison_meta['previous_period']} → {comparison_meta['current_period']}**")
+        st.caption(f"{tr('Comparing')} **{comparison_meta['previous_period']} → {comparison_meta['current_period']}**")
 
         cm1, cm2, cm3, cm4, cm5 = st.columns(5)
         cm1.metric("Purchase need", f"€{comparison_meta['purchase_current']:,.0f}", f"{comparison_meta['purchase_delta']:+,.0f} €")
@@ -3426,11 +3616,11 @@ with tabs[10]:
         cm5.metric("Action changes", comparison_meta["action_changes"], f"{comparison_meta['worsened']} worsened")
 
         if comparison_meta["worsened"] > comparison_meta["improved"]:
-            st.warning(f"Hay más cambios desfavorables ({comparison_meta['worsened']}) que favorables ({comparison_meta['improved']}).")
+            st.warning(f"{tr('There are more unfavorable changes')} ({comparison_meta['worsened']}) {tr('than favorable changes')} ({comparison_meta['improved']}).")
         elif comparison_meta["improved"] > comparison_meta["worsened"]:
-            st.success(f"La evolución es mayoritariamente favorable: {comparison_meta['improved']} mejorados frente a {comparison_meta['worsened']} empeorados.")
+            st.success(f"{tr('The evolution is mostly favorable')}: {comparison_meta['improved']} {tr('improved')} {tr('versus')} {comparison_meta['worsened']} {tr('worsened')}.")
         else:
-            st.info("La evolución está equilibrada entre mejoras y empeoramientos.")
+            st.info(tr("The evolution is balanced between improvements and deteriorations."))
 
         view = comparison[[
             "Priority","SKU","Description","Supplier","Previous_Action","Current_Action",
@@ -3442,7 +3632,7 @@ with tabs[10]:
 
         c1, c2 = st.columns(2)
         with c1:
-            st.subheader("Top worsened / watch")
+            st.subheader(tr("Top worsened / watch"))
             worsened = comparison[comparison["Change_Classification"].isin(["WORSENED","WATCH"])].head(8)
             st.dataframe(
                 worsened[["SKU","Description","Current_Action","Days_Cover_Delta",
@@ -3450,7 +3640,7 @@ with tabs[10]:
                 use_container_width=True, hide_index=True
             )
         with c2:
-            st.subheader("Top improved")
+            st.subheader(tr("Top improved"))
             improved = comparison[comparison["Change_Classification"]=="IMPROVED"].sort_values(
                 ["Service_Risk_Delta","Purchase_Value_Delta"], ascending=[True,True]
             ).head(8)
@@ -3462,7 +3652,7 @@ with tabs[10]:
 
         change_report_html = build_change_monitor_html(comparison, comparison_meta)
 
-        st.markdown("### 📤 Export Change Monitor")
+        st.markdown(tr("### 📤 Export Change Monitor"))
         export_cm1, export_cm2 = st.columns(2)
 
         with export_cm1:
@@ -3478,7 +3668,7 @@ with tabs[10]:
             change_report_xlsx = _excel_change_monitor_bytes(comparison, comparison_meta)
         except Exception as export_exc:
             change_report_xlsx = None
-            st.warning(f"Excel export unavailable: {export_exc}")
+            st.warning(f"{tr('Excel export unavailable')}: {export_exc}")
 
         with export_cm2:
             if change_report_xlsx:
@@ -3503,7 +3693,7 @@ with tabs[11]:
     st.subheader("🤖 Your Supply Chain Copilot")
     if st.session_state.get("copilot_prefill"):
         pending = st.session_state["copilot_prefill"]
-        st.info(f"**Prepared analysis:** {pending}")
+        st.info(f"**{tr('Prepared analysis')}:** {pending}")
         pc1, pc2 = st.columns(2)
         if pc1.button("▶️ Run prepared analysis", use_container_width=True, key="run_prefill"):
             st.session_state.chat.append({"role":"user", "content":pending})
@@ -3523,23 +3713,23 @@ with tabs[11]:
     q1, q2, q3, q4, q5, q6 = st.columns(6)
     quick_question = None
     if q1.button("🛒 Purchase priorities"):
-        quick_question = "¿Qué debería comprar esta semana y cuáles son las 3 prioridades más importantes?"
+        quick_question = tr("What should I buy this week and what are the 3 most important priorities?")
     if q2.button("💰 Reduce inventory"):
-        quick_question = "¿Dónde puedo reducir inventario sin aumentar demasiado el riesgo de servicio?"
+        quick_question = tr("Where can I reduce inventory without materially increasing service risk?")
     if q3.button("🚚 Supplier risk"):
-        quick_question = "¿Qué proveedores requieren más atención y por qué?"
+        quick_question = tr("Which suppliers require the most attention and why?")
     if q4.button("📈 Demand outlook"):
-        quick_question = "¿Qué cambios de demanda pueden cambiar mis decisiones de compra?"
+        quick_question = tr("What demand changes could alter my purchase decisions?")
     if q5.button("🔄 What changed?"):
-        quick_question = "¿Qué ha cambiado entre el último periodo y el anterior y cuáles son las 3 mayores variaciones?"
+        quick_question = tr("What changed between the latest period and the previous one, and what are the 3 largest variations?")
     if q6.button("📊 Logistics KPIs"):
-        quick_question = "¿Cuál es el estado de los principales KPI logísticos y cuáles requieren atención?"
+        quick_question = tr("What is the state of the main logistics KPIs and which ones require attention?")
     if quick_question:
         st.session_state.chat.append({"role": "user", "content": quick_question})
         with st.chat_message("user"):
             st.markdown(quick_question)
         with st.chat_message("assistant"):
-            with st.spinner("Ejecutando análisis de Supply Chain..."):
+            with st.spinner(tr("Running Supply Chain analysis...")):
                 ans = ai_chat(quick_question, a, effective_key, model, comparison, comparison_meta, raw)
             st.markdown(ans)
         st.session_state.chat.append({"role": "assistant", "content": ans})
@@ -3565,7 +3755,7 @@ with tabs[11]:
 # -----------------------------
 with tabs[12]:
     st.subheader("📤 Reporting Center")
-    st.caption("Visual HTML reports and professional Excel workbooks containing the same decision-ready information.")
+    st.caption(tr("Visual HTML reports and professional Excel workbooks containing the same decision-ready information."))
 
     pack_bytes, report_map = build_management_pack(a, raw, dq, plan, comparison, comparison_meta)
 
@@ -3604,7 +3794,7 @@ with tabs[12]:
             )
     st.caption("Same executive KPIs and priorities, with editable tables, formatting and charts in Excel.")
 
-    st.markdown("### 2. Detailed visual reports")
+    st.markdown(tr("### 2. Detailed visual reports"))
     d1, d2 = st.columns(2)
     with d1:
         st.download_button("📊 Inventory & Service Risk (HTML)", report_map["02_Inventory_Risk_Report.html"].encode("utf-8"), "inventory_service_risk_report.html", "text/html", use_container_width=True)
@@ -3656,7 +3846,7 @@ with tabs[12]:
             planning_export_xlsx = _excel_planning_agent_bytes(planning, planning_meta)
         except Exception as planning_export_exc:
             planning_export_xlsx = None
-            st.warning(f"Excel export unavailable: {planning_export_exc}")
+            st.warning(f"{tr('Excel export unavailable')}: {planning_export_exc}")
         if planning_export_xlsx:
             st.download_button(
                 "📗 Planning Agent Report (Excel)",
@@ -3683,10 +3873,10 @@ with tabs[12]:
     st.caption("The Excel pack combines the executive dashboard, detailed report sheets, Change Monitor and normalized source data in one workbook.")
 
     if excel_error:
-        st.warning(f"Excel export unavailable: {excel_error}")
+        st.warning(f"{tr('Excel export unavailable')}: {excel_error}")
 
     st.info("Raw CSV exports remain removed from the reporting workflow. HTML and Excel are now the primary shareable outputs.")
 
 
 st.divider()
-st.caption("Supply Chain AI Copilot V2.0.8 — recommendations require planner validation before execution.")
+st.caption("Supply Chain AI Copilot V2.0.9 — recommendations require planner validation before execution.")
