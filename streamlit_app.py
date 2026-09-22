@@ -220,6 +220,7 @@ def supplier_message(row, company=""):
         f"Thank you,\n{company or 'Supply Chain Team'}"
     )
 
+
 def _html_badge(value):
     colors = {
         "🔴 CRITICAL": "#FEE2E2", "🟠 REVIEW": "#FFEDD5",
@@ -231,29 +232,106 @@ def _html_badge(value):
         "WARNING": "#FFEDD5", "CRITICAL": "#FEE2E2", "OK": "#DCFCE7"
     }
     bg = colors.get(str(value), "#F3F4F6")
-    return f'<span style="background:{bg};padding:4px 8px;border-radius:12px;font-weight:700;">{html_lib.escape(str(value))}</span>'
+    return f'<span style="background:{bg};padding:4px 8px;border-radius:999px;font-weight:700;">{html_lib.escape(str(value))}</span>'
 
-def _html_table(df, columns, currency_cols=None):
+def _fmt_num(v):
+    if pd.isna(v):
+        return "—"
+    if isinstance(v, (float, np.floating)):
+        return f"{float(v):,.1f}"
+    return html_lib.escape(str(v))
+
+def _fmt_eur(v):
+    if pd.isna(v):
+        return "—"
+    return f"€{float(v):,.0f}"
+
+def _bar(value, max_value, color="#2563EB"):
+    width = 0 if not max_value or max_value <= 0 else min(100, max(0, float(value) / float(max_value) * 100))
+    return (
+        f'<div style="background:#E5E7EB;border-radius:8px;height:9px;width:100%;">'
+        f'<div style="background:{color};width:{width:.1f}%;height:9px;border-radius:8px;"></div>'
+        f'</div>'
+    )
+
+def _table_html(df, columns, currency_cols=None, bar_cols=None, status_cols=None):
     currency_cols = set(currency_cols or [])
-    body = []
+    bar_cols = set(bar_cols or [])
+    status_cols = set(status_cols or [])
+    max_by_col = {}
+    for c in bar_cols:
+        if c in df.columns and len(df):
+            vals = pd.to_numeric(df[c], errors="coerce").fillna(0)
+            max_by_col[c] = float(vals.max()) if len(vals) else 0
+
+    rows = []
     for _, r in df.iterrows():
         cells = []
         for c in columns:
             v = r[c]
-            if c in currency_cols:
-                cell = f"€{float(v):,.0f}" if pd.notna(v) else "—"
-            elif c in {"Status","Action","Decision_Confidence"}:
+            if c in status_cols:
                 cell = _html_badge(v)
-            elif isinstance(v, (float, np.floating)):
-                cell = f"{float(v):,.1f}"
+            elif c in currency_cols:
+                cell = _fmt_eur(v)
+            elif c in bar_cols:
+                cell = f"{_fmt_num(v)}{_bar(v, max_by_col.get(c, 0))}"
             else:
-                cell = html_lib.escape(str(v))
+                cell = _fmt_num(v)
             cells.append(f"<td>{cell}</td>")
-        body.append("<tr>" + "".join(cells) + "</tr>")
-    return "".join(body)
+        rows.append("<tr>" + "".join(cells) + "</tr>")
+    return "".join(rows)
+
+def _html_shell(title, subtitle, body):
+    generated = datetime.now().strftime("%Y-%m-%d %H:%M")
+    return f"""<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{html_lib.escape(title)}</title>
+<style>
+:root{{--ink:#182230;--muted:#64748b;--line:#e5e7eb;--bg:#f4f7fb;--card:#ffffff;--blue:#2563eb;}}
+*{{box-sizing:border-box}}
+body{{font-family:Inter,Segoe UI,Arial,sans-serif;background:var(--bg);color:var(--ink);margin:0;padding:28px}}
+.container{{max-width:1240px;margin:auto}}
+.header{{background:linear-gradient(135deg,#10243d,#1d4ed8);color:white;padding:30px 34px;border-radius:20px}}
+.header h1{{margin:0 0 8px;font-size:30px}}
+.header p{{margin:0;color:#dbeafe}}
+.meta{{margin-top:12px;font-size:12px;color:#bfdbfe}}
+.section{{background:var(--card);padding:22px;margin:18px 0;border-radius:16px;box-shadow:0 4px 18px rgba(15,23,42,.06)}}
+h2{{margin:0 0 16px;font-size:20px}}
+.grid{{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin:18px 0}}
+.grid5{{display:grid;grid-template-columns:repeat(5,1fr);gap:14px;margin:18px 0}}
+.card{{background:white;border-radius:14px;padding:18px;box-shadow:0 4px 18px rgba(15,23,42,.05)}}
+.label{{font-size:11px;color:#64748b;text-transform:uppercase;font-weight:800;letter-spacing:.05em}}
+.value{{font-size:27px;font-weight:800;margin-top:6px}}
+.sub{{font-size:12px;color:#64748b;margin-top:5px}}
+table{{width:100%;border-collapse:collapse;font-size:13px}}
+th{{background:#eef2f7;text-align:left;padding:11px}}
+td{{padding:10px;border-bottom:1px solid var(--line);vertical-align:top}}
+.note{{padding:13px 15px;border-radius:12px;background:#eff6ff;color:#1e40af}}
+.warning{{padding:13px 15px;border-radius:12px;background:#fff7ed;color:#9a3412}}
+.success{{padding:13px 15px;border-radius:12px;background:#f0fdf4;color:#166534}}
+.small{{font-size:12px;color:#64748b}}
+.footer{{margin-top:18px;font-size:11px;color:#64748b}}
+@media(max-width:900px){{.grid,.grid5{{grid-template-columns:1fr 1fr}}}}
+@media print{{body{{background:white;padding:10px}}.section,.card{{box-shadow:none;border:1px solid var(--line)}}.header{{break-inside:avoid}}}}
+</style>
+</head>
+<body>
+<div class="container">
+<div class="header">
+<h1>{html_lib.escape(title)}</h1>
+<p>{html_lib.escape(subtitle)}</p>
+<div class="meta">Generated {generated} · Supply Chain AI Copilot V1.7</div>
+</div>
+{body}
+<div class="footer">Decision support only. Validate purchase execution and supplier commitments before release.</div>
+</div>
+</body>
+</html>"""
 
 def build_executive_html(a, raw, dq, plan):
-    generated = datetime.now().strftime("%Y-%m-%d %H:%M")
     critical = int((a["Status"] == "🔴 CRITICAL").sum())
     review = int((a["Status"] == "🟠 REVIEW").sum())
     excess = int((a["Status"] == "🟡 EXCESS").sum())
@@ -261,7 +339,7 @@ def build_executive_html(a, raw, dq, plan):
     inventory = float(a["Inventory_Value"].sum())
     service_risk = float(a["Service_Risk_Value"].sum())
     excess_value = float(a["Excess_Inventory_Value"].sum())
-
+    purchase_skus = int((a["Recommended_Order"] > 0).sum())
     top = a.sort_values("Decision_Score", ascending=False).head(10)
     supplier = a.groupby("Supplier", as_index=False).agg(
         Purchase_Value=("Purchase_Value","sum"),
@@ -269,76 +347,108 @@ def build_executive_html(a, raw, dq, plan):
         Critical=("Status", lambda s: int((s=="🔴 CRITICAL").sum())),
         Inventory=("Inventory_Value","sum"),
     ).sort_values(["Critical","Service_Risk","Purchase_Value"], ascending=[False,False,False]).head(10)
-
     dq_summary = data_quality_summary(raw, dq)
 
-    html = f"""<!doctype html>
-<html><head><meta charset="utf-8"><title>Supply Chain Executive Report</title>
-<style>
-body{{font-family:Inter,Arial,sans-serif;background:#f4f7fb;color:#172033;margin:0;padding:32px}}
-.container{{max-width:1200px;margin:auto}}
-.header{{background:#132238;color:white;padding:28px 32px;border-radius:16px}}
-h1{{margin:0 0 8px;font-size:30px}} h2{{margin-top:0}}
-.meta{{color:#cbd5e1}}
-.grid{{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin:18px 0}}
-.card{{background:#fff;border-radius:14px;padding:18px;box-shadow:0 3px 14px rgba(15,23,42,.08)}}
-.label{{font-size:12px;color:#64748b;text-transform:uppercase;font-weight:700}}
-.value{{font-size:28px;font-weight:800;margin-top:5px}}
-.section{{background:#fff;padding:22px;margin:18px 0;border-radius:14px}}
-table{{width:100%;border-collapse:collapse;font-size:13px}}
-th{{background:#eef2f7;text-align:left;padding:10px}} td{{padding:9px;border-bottom:1px solid #e5e7eb}}
-.small{{font-size:12px;color:#64748b}}
-</style></head>
-<body><div class="container">
-<div class="header"><h1>📦 Supply Chain AI — Executive Decision Report</h1>
-<div class="meta">Generated {generated} · {dq_summary['skus']} SKUs · {dq_summary['suppliers']} suppliers · latest period {dq_summary['latest_period']}</div></div>
-
+    body = f"""
 <div class="grid">
-<div class="card"><div class="label">Inventory value</div><div class="value">€{inventory:,.0f}</div></div>
-<div class="card"><div class="label">Purchase requirement</div><div class="value">€{purchase:,.0f}</div></div>
-<div class="card"><div class="label">Service risk</div><div class="value">€{service_risk:,.0f}</div></div>
-<div class="card"><div class="label">Excess inventory</div><div class="value">€{excess_value:,.0f}</div></div>
+<div class="card"><div class="label">Inventory value</div><div class="value">{_fmt_eur(inventory)}</div></div>
+<div class="card"><div class="label">Purchase requirement</div><div class="value">{_fmt_eur(purchase)}</div><div class="sub">{purchase_skus} SKUs with recommendation</div></div>
+<div class="card"><div class="label">Service risk exposure</div><div class="value">{_fmt_eur(service_risk)}</div></div>
+<div class="card"><div class="label">Excess inventory</div><div class="value">{_fmt_eur(excess_value)}</div></div>
 </div>
-
-<div class="grid">
-<div class="card"><div class="label">Critical SKUs</div><div class="value">{critical}</div></div>
-<div class="card"><div class="label">Review SKUs</div><div class="value">{review}</div></div>
-<div class="card"><div class="label">Excess SKUs</div><div class="value">{excess}</div></div>
-<div class="card"><div class="label">DQ issues</div><div class="value">{dq_summary['critical'] + dq_summary['warnings']}</div></div>
+<div class="grid5">
+<div class="card"><div class="label">Critical</div><div class="value">{critical}</div></div>
+<div class="card"><div class="label">Review</div><div class="value">{review}</div></div>
+<div class="card"><div class="label">Excess</div><div class="value">{excess}</div></div>
+<div class="card"><div class="label">Data warnings</div><div class="value">{dq_summary["warnings"]}</div></div>
+<div class="card"><div class="label">Latest period</div><div class="value" style="font-size:20px">{dq_summary["latest_period"]}</div></div>
 </div>
-
-<div class="section"><h2>1. Top priorities</h2>
+<div class="section">
+<h2>1. Executive priorities</h2>
+<div class="note">The highest-priority decisions are ranked by stockout risk, economic exposure, timing and confidence.</div>
 <table><thead><tr><th>SKU</th><th>Description</th><th>Supplier</th><th>Status</th><th>Action</th><th>Timing</th><th>Qty</th><th>Purchase</th></tr></thead>
-<tbody>{_html_table(top, ["SKU","Description","Supplier","Status","Action","Action_Timing","Recommended_Order","Purchase_Value"], ["Purchase_Value"])}</tbody></table></div>
-
-<div class="section"><h2>2. Supplier exposure</h2>
-<table><thead><tr><th>Supplier</th><th>Critical</th><th>Service risk</th><th>Purchase</th><th>Inventory</th></tr></thead>
-<tbody>{_html_table(supplier, ["Supplier","Critical","Service_Risk","Purchase_Value","Inventory"], ["Service_Risk","Purchase_Value","Inventory"])}</tbody></table></div>
-
-<div class="section"><h2>3. Weekly action plan</h2>
-<table><thead><tr><th>Priority</th><th>SKU</th><th>Action</th><th>Owner</th><th>Deadline</th><th>Reason</th><th>Confidence</th></tr></thead>
-<tbody>{_html_table(plan.head(15), ["Priority","SKU","Action","Owner","Deadline","Reason","Confidence"])}</tbody></table></div>
-
-<div class="section"><h2>4. Data Quality</h2>
-<p><strong>{dq_summary['ok']}</strong> checks OK · <strong>{dq_summary['warnings']}</strong> warnings · <strong>{dq_summary['critical']}</strong> critical issues.</p>
-<table><thead><tr><th>Category</th><th>Check</th><th>Status</th><th>Count</th><th>Details</th></tr></thead>
-<tbody>{_html_table(dq, ["Category","Check","Status","Count","Details"])}</tbody></table></div>
-
-<div class="section"><h2>5. Decision rules</h2>
-<ul>
-<li><strong>BUY_NOW:</strong> on-hand stock below lead-time demand.</li>
-<li><strong>CONFIRM_PO:</strong> existing PO should be checked before adding a new order.</li>
-<li><strong>DO_NOT_BUY:</strong> coverage materially above the current policy.</li>
-<li><strong>Confidence:</strong> based mainly on demand variability and data availability.</li>
-</ul>
-<p class="small">Decision support only. Purchase execution and supplier commitments require planner/buyer validation.</p>
+<tbody>{_table_html(top, ["SKU","Description","Supplier","Status","Action","Action_Timing","Recommended_Order","Purchase_Value"], ["Purchase_Value"], status_cols=["Status","Action"])}</tbody></table>
 </div>
+<div class="section">
+<h2>2. Supplier exposure</h2>
+<table><thead><tr><th>Supplier</th><th>Critical</th><th>Service risk</th><th>Purchase exposure</th><th>Inventory</th></tr></thead>
+<tbody>{_table_html(supplier, ["Supplier","Critical","Service_Risk","Purchase_Value","Inventory"], ["Service_Risk","Purchase_Value","Inventory"], bar_cols=["Purchase_Value"])}</tbody></table>
+</div>
+<div class="section">
+<h2>3. Weekly action plan</h2>
+<table><thead><tr><th>Priority</th><th>SKU</th><th>Action</th><th>Owner</th><th>Deadline</th><th>Reason</th><th>Confidence</th></tr></thead>
+<tbody>{_table_html(plan.head(15), ["Priority","SKU","Action","Owner","Deadline","Reason","Confidence"], status_cols=["Action","Confidence"])}</tbody></table>
+</div>
+<div class="section">
+<h2>4. Data quality</h2>
+<p><strong>{dq_summary["ok"]}</strong> checks OK · <strong>{dq_summary["warnings"]}</strong> warnings · <strong>{dq_summary["critical"]}</strong> critical issues.</p>
+<table><thead><tr><th>Category</th><th>Check</th><th>Status</th><th>Count</th><th>Details</th></tr></thead>
+<tbody>{_table_html(dq, ["Category","Check","Status","Count","Details"], status_cols=["Status"])}</tbody></table>
+</div>
+"""
+    return _html_shell("📦 Supply Chain AI — Executive Decision Report",
+                       f"{dq_summary['skus']} SKUs · {dq_summary['suppliers']} suppliers · latest period {dq_summary['latest_period']}",
+                       body)
 
-</div></body></html>"""
-    return html
+def build_inventory_report_html(a, raw):
+    top_excess = a.sort_values("Excess_Inventory_Value", ascending=False).head(15)
+    top_service = a.sort_values("Service_Risk_Value", ascending=False).head(15)
+    status = a["Status"].value_counts().rename_axis("Status").reset_index(name="SKUs")
+    body = f"""
+<div class="grid">
+<div class="card"><div class="label">Inventory value</div><div class="value">{_fmt_eur(a["Inventory_Value"].sum())}</div></div>
+<div class="card"><div class="label">Service risk</div><div class="value">{_fmt_eur(a["Service_Risk_Value"].sum())}</div></div>
+<div class="card"><div class="label">Excess value</div><div class="value">{_fmt_eur(a["Excess_Inventory_Value"].sum())}</div></div>
+<div class="card"><div class="label">Average cover</div><div class="value">{a["Days_Cover"].replace([np.inf,-np.inf],np.nan).mean():.1f}d</div></div>
+</div>
+<div class="section"><h2>Inventory health by status</h2>
+<table><thead><tr><th>Status</th><th>SKUs</th></tr></thead><tbody>{_table_html(status, ["Status","SKUs"], status_cols=["Status"])}</tbody></table></div>
+<div class="section"><h2>Highest excess exposure</h2>
+<table><thead><tr><th>SKU</th><th>Description</th><th>Supplier</th><th>Coverage</th><th>Excess qty</th><th>Excess value</th><th>Action</th></tr></thead>
+<tbody>{_table_html(top_excess, ["SKU","Description","Supplier","Days_Cover","Excess_Inventory_Qty","Excess_Inventory_Value","Action"], ["Excess_Inventory_Value"], status_cols=["Action"])}</tbody></table></div>
+<div class="section"><h2>Highest service-risk exposure</h2>
+<table><thead><tr><th>SKU</th><th>Description</th><th>Supplier</th><th>Coverage</th><th>Lead time</th><th>Risk qty</th><th>Risk value</th><th>Action</th></tr></thead>
+<tbody>{_table_html(top_service, ["SKU","Description","Supplier","Days_Cover","Lead_Time_Days","Service_Risk_Qty","Service_Risk_Value","Action"], ["Service_Risk_Value"], status_cols=["Action"])}</tbody></table></div>
+"""
+    return _html_shell("📊 Inventory & Service Risk Report", "Inventory health, excess exposure and service-risk priorities.", body)
 
-def build_management_pack(a, raw, dq, plan):
-    po = export_purchase(a)
+def build_purchase_report_html(a):
+    x = a[a["Recommended_Order"] > 0].sort_values("Purchase_Value", ascending=False)
+    supplier = x.groupby("Supplier", as_index=False).agg(
+        Lines=("SKU","count"), Units=("Recommended_Order","sum"), Purchase_Value=("Purchase_Value","sum")
+    ).sort_values("Purchase_Value", ascending=False)
+    body = f"""
+<div class="grid">
+<div class="card"><div class="label">Purchase lines</div><div class="value">{len(x)}</div></div>
+<div class="card"><div class="label">Units to order</div><div class="value">{x["Recommended_Order"].sum():,.0f}</div></div>
+<div class="card"><div class="label">Purchase value</div><div class="value">{_fmt_eur(x["Purchase_Value"].sum())}</div></div>
+<div class="card"><div class="label">Suppliers</div><div class="value">{x["Supplier"].nunique()}</div></div>
+</div>
+<div class="section"><h2>Purchase requirements by supplier</h2>
+<table><thead><tr><th>Supplier</th><th>Lines</th><th>Units</th><th>Purchase value</th></tr></thead>
+<tbody>{_table_html(supplier, ["Supplier","Lines","Units","Purchase_Value"], ["Purchase_Value"], bar_cols=["Purchase_Value"])}</tbody></table></div>
+<div class="section"><h2>Recommended purchases</h2>
+<table><thead><tr><th>SKU</th><th>Description</th><th>Supplier</th><th>Qty</th><th>Unit cost</th><th>Purchase value</th><th>Coverage</th><th>Lead time</th><th>Action</th></tr></thead>
+<tbody>{_table_html(x, ["SKU","Description","Supplier","Recommended_Order","Unit_Cost","Purchase_Value","Days_Cover","Lead_Time_Days","Action"], ["Purchase_Value","Unit_Cost"], status_cols=["Action"])}</tbody></table></div>
+<div class="section"><h2>Planner guidance</h2><div class="note">Validate open POs and supplier ETA before releasing incremental orders. Prioritize BUY_NOW lines first.</div></div>
+"""
+    return _html_shell("🛒 Purchase Plan Report", "Supplier-oriented replenishment recommendations with economic exposure.", body)
+
+def build_action_report_html(plan):
+    body = f"""
+<div class="grid">
+<div class="card"><div class="label">Total actions</div><div class="value">{len(plan)}</div></div>
+<div class="card"><div class="label">Immediate</div><div class="value">{int(plan["Deadline"].eq("Today").sum())}</div></div>
+<div class="card"><div class="label">Purchase value</div><div class="value">{_fmt_eur(plan["Purchase_Value"].sum())}</div></div>
+<div class="card"><div class="label">Owners</div><div class="value">{plan["Owner"].nunique()}</div></div>
+</div>
+<div class="section"><h2>Planner worklist</h2>
+<table><thead><tr><th>Priority</th><th>SKU</th><th>Description</th><th>Supplier</th><th>Action</th><th>Owner</th><th>Deadline</th><th>Reason</th><th>Confidence</th><th>Purchase</th></tr></thead>
+<tbody>{_table_html(plan, ["Priority","SKU","Description","Supplier","Action","Owner","Deadline","Reason","Confidence","Purchase_Value"], ["Purchase_Value"], status_cols=["Action","Confidence"])}</tbody></table></div>
+"""
+    return _html_shell("📝 Weekly Action Plan Report", "Planner-ready operational worklist with ownership and deadlines.", body)
+
+def build_supplier_report_html(a):
     supplier = a.groupby("Supplier", as_index=False).agg(
         SKUs=("SKU","count"),
         Critical=("Status", lambda s: int((s=="🔴 CRITICAL").sum())),
@@ -346,30 +456,65 @@ def build_management_pack(a, raw, dq, plan):
         Purchase_Value=("Purchase_Value","sum"),
         Inventory_Value=("Inventory_Value","sum"),
         Service_Risk_Value=("Service_Risk_Value","sum"),
-        Excess_Inventory_Value=("Excess_Inventory_Value","sum")
-    ).sort_values(["Critical","Service_Risk_Value","Purchase_Value"], ascending=[False,False,False])
+        Excess_Inventory_Value=("Excess_Inventory_Value","sum"),
+    )
+    supplier["Supplier_Risk_Score"] = (
+        supplier["Critical"]*100 + supplier["Review"]*40
+        + np.log1p(supplier["Service_Risk_Value"])*5
+        + np.log1p(supplier["Purchase_Value"])*2
+    )
+    supplier = supplier.sort_values("Supplier_Risk_Score", ascending=False)
+    body = f"""
+<div class="grid">
+<div class="card"><div class="label">Suppliers</div><div class="value">{len(supplier)}</div></div>
+<div class="card"><div class="label">With critical SKUs</div><div class="value">{int((supplier["Critical"]>0).sum())}</div></div>
+<div class="card"><div class="label">Service risk</div><div class="value">{_fmt_eur(supplier["Service_Risk_Value"].sum())}</div></div>
+<div class="card"><div class="label">Purchase exposure</div><div class="value">{_fmt_eur(supplier["Purchase_Value"].sum())}</div></div>
+</div>
+<div class="section"><h2>Supplier risk ranking</h2>
+<table><thead><tr><th>Supplier</th><th>SKUs</th><th>Critical</th><th>Review</th><th>Risk score</th><th>Service risk</th><th>Purchase</th><th>Inventory</th><th>Excess</th></tr></thead>
+<tbody>{_table_html(supplier, ["Supplier","SKUs","Critical","Review","Supplier_Risk_Score","Service_Risk_Value","Purchase_Value","Inventory_Value","Excess_Inventory_Value"], ["Service_Risk_Value","Purchase_Value","Inventory_Value","Excess_Inventory_Value"], bar_cols=["Supplier_Risk_Score"])}</tbody></table></div>
+<div class="section"><h2>Management interpretation</h2><div class="note">Supplier ranking combines critical lines, service-risk exposure and purchase exposure. It is prioritization support, not a supplier-performance scorecard.</div></div>
+"""
+    return _html_shell("🚚 Supplier Risk Report", "Supplier concentration, service exposure and purchasing exposure.", body)
 
-    report_html = build_executive_html(a, raw, dq, plan)
-    files = {
-        "executive_report.html": report_html.encode("utf-8"),
-        "sku_analysis.csv": a.to_csv(index=False).encode("utf-8"),
-        "action_plan.csv": plan.to_csv(index=False).encode("utf-8"),
-        "purchase_plan.csv": po.to_csv(index=False).encode("utf-8"),
-        "supplier_risk.csv": supplier.to_csv(index=False).encode("utf-8"),
-        "data_quality.csv": dq.to_csv(index=False).encode("utf-8"),
+def build_data_quality_report_html(raw, dq):
+    s = data_quality_summary(raw, dq)
+    status_class = "success" if s["critical"] == 0 and s["warnings"] == 0 else "warning"
+    status_text = "✅ All current checks passed." if s["critical"] == 0 and s["warnings"] == 0 else "⚠️ Review the issues below before operational use."
+    body = f"""
+<div class="grid5">
+<div class="card"><div class="label">Rows</div><div class="value">{s["rows"]}</div></div>
+<div class="card"><div class="label">SKUs</div><div class="value">{s["skus"]}</div></div>
+<div class="card"><div class="label">Suppliers</div><div class="value">{s["suppliers"]}</div></div>
+<div class="card"><div class="label">Warnings</div><div class="value">{s["warnings"]}</div></div>
+<div class="card"><div class="label">Critical</div><div class="value">{s["critical"]}</div></div>
+</div>
+<div class="section"><h2>Quality status</h2><div class="{status_class}">{status_text}</div></div>
+<div class="section"><h2>Detailed checks</h2>
+<table><thead><tr><th>Category</th><th>Check</th><th>Status</th><th>Count</th><th>Details</th></tr></thead>
+<tbody>{_table_html(dq, ["Category","Check","Status","Count","Details"], status_cols=["Status"])}</tbody></table></div>
+"""
+    return _html_shell("🧹 Data Quality Report", "Structural and consistency checks for the current dataset.", body)
+
+def build_management_pack(a, raw, dq, plan):
+    reports = {
+        "01_Executive_Report.html": build_executive_html(a, raw, dq, plan),
+        "02_Inventory_Risk_Report.html": build_inventory_report_html(a, raw),
+        "03_Purchase_Plan_Report.html": build_purchase_report_html(a),
+        "04_Action_Plan_Report.html": build_action_report_html(plan),
+        "05_Supplier_Risk_Report.html": build_supplier_report_html(a),
+        "06_Data_Quality_Report.html": build_data_quality_report_html(raw, dq),
     }
-
-    messages = []
-    for _, r in a[a["Action"].isin(["BUY_NOW","CONFIRM_PO"])].sort_values("Decision_Score", ascending=False).iterrows():
-        messages.append(supplier_message(r))
-        messages.append("\n" + "="*80 + "\n")
-    files["supplier_messages.txt"] = "".join(messages).encode("utf-8")
-
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
-        for name, payload in files.items():
-            z.writestr(name, payload)
-    return buf.getvalue(), report_html
+        for name, text in reports.items():
+            z.writestr(name, text.encode("utf-8"))
+        z.writestr(
+            "README.txt",
+            b"Open 01_Executive_Report.html first. All reports are self-contained HTML files designed for reading, sharing and printing."
+        )
+    return buf.getvalue(), reports
 
 
 def validate(df):
@@ -1002,7 +1147,7 @@ a["Forecast_Change_Pct"] = np.where(
 # Header
 # -----------------------------
 st.title("📦 Supply Chain AI Copilot")
-st.caption("From raw supply-chain data to prioritized decisions · V1.6")
+st.caption("From raw supply-chain data to prioritized decisions · V1.7")
 
 c1,c2,c3,c4,c5,c6 = st.columns(6)
 c1.metric("SKUs", K["sku"])
@@ -1311,63 +1456,81 @@ with tabs[8]:
 # Export
 # -----------------------------
 with tabs[9]:
-    st.subheader("📤 Management Reporting")
-    st.caption("Management-ready reports, not just raw data exports.")
+    st.subheader("📤 Reporting Center")
+    st.caption("Visual, decision-ready reports designed for management, planning and procurement.")
 
-    report_zip, report_html = build_management_pack(a, raw, dq, plan)
+    pack_bytes, report_map = build_management_pack(a, raw, dq, plan)
 
     r1, r2, r3, r4 = st.columns(4)
-    r1.metric("Purchase need", f"€{a['Purchase_Value'].sum():,.0f}")
+    r1.metric("Purchase requirement", f"€{a['Purchase_Value'].sum():,.0f}")
     r2.metric("Service risk", f"€{a['Service_Risk_Value'].sum():,.0f}")
     r3.metric("Excess exposure", f"€{a['Excess_Inventory_Value'].sum():,.0f}")
     r4.metric("Actions", len(plan))
 
     st.markdown("### 1. Executive Report")
     st.download_button(
-        "📊 Download Executive Report (HTML)",
-        report_html.encode("utf-8"),
+        "📊 Download Executive Report",
+        report_map["01_Executive_Report.html"].encode("utf-8"),
         "supply_chain_executive_report.html",
         "text/html",
         use_container_width=True
     )
-    st.caption("A readable management report with KPIs, priorities, supplier exposure, action plan and data quality.")
+    st.caption("KPIs, top priorities, supplier exposure, action plan and data quality in one report.")
 
-    st.markdown("### 2. Complete Management Pack")
+    st.markdown("### 2. Detailed visual reports")
+    c1, c2 = st.columns(2)
+    with c1:
+        st.download_button(
+            "📊 Inventory & Service Risk Report",
+            report_map["02_Inventory_Risk_Report.html"].encode("utf-8"),
+            "inventory_service_risk_report.html",
+            "text/html",
+            use_container_width=True
+        )
+        st.download_button(
+            "🛒 Purchase Plan Report",
+            report_map["03_Purchase_Plan_Report.html"].encode("utf-8"),
+            "purchase_plan_report.html",
+            "text/html",
+            use_container_width=True
+        )
+        st.download_button(
+            "🚚 Supplier Risk Report",
+            report_map["05_Supplier_Risk_Report.html"].encode("utf-8"),
+            "supplier_risk_report.html",
+            "text/html",
+            use_container_width=True
+        )
+    with c2:
+        st.download_button(
+            "📝 Weekly Action Plan Report",
+            report_map["04_Action_Plan_Report.html"].encode("utf-8"),
+            "weekly_action_plan_report.html",
+            "text/html",
+            use_container_width=True
+        )
+        st.download_button(
+            "🧹 Data Quality Report",
+            report_map["06_Data_Quality_Report.html"].encode("utf-8"),
+            "data_quality_report.html",
+            "text/html",
+            use_container_width=True
+        )
+
+    st.markdown("### 3. Complete Management Pack")
     st.download_button(
         "📦 Download Management Pack (ZIP)",
-        report_zip,
-        "supply_chain_management_pack.zip",
+        pack_bytes,
+        "supply_chain_management_pack_v17.zip",
         "application/zip",
         use_container_width=True
     )
-    st.caption("Includes executive report, SKU analysis, action plan, purchase plan, supplier risk, data quality and supplier messages.")
+    st.caption("Six self-contained HTML reports + README. Open the Executive Report first.")
 
-    st.markdown("### 3. Individual exports")
-    e1, e2, e3 = st.columns(3)
-    with e1:
-        st.download_button(
-            "⬇️ SKU analysis",
-            a.to_csv(index=False).encode("utf-8"),
-            "sku_analysis.csv",
-            "text/csv",
-            use_container_width=True
-        )
-    with e2:
-        st.download_button(
-            "⬇️ Purchase plan",
-            export_purchase(a).to_csv(index=False).encode("utf-8"),
-            "purchase_plan.csv",
-            "text/csv",
-            use_container_width=True
-        )
-    with e3:
-        st.download_button(
-            "⬇️ Action plan",
-            plan.to_csv(index=False).encode("utf-8"),
-            "action_plan.csv",
-            "text/csv",
-            use_container_width=True
-        )
+    st.info(
+        "The previous raw CSV exports have been removed from the main reporting workflow. "
+        "Reports are now formatted for direct reading, sharing and printing."
+    )
 
 
 st.divider()
