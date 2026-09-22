@@ -14,6 +14,12 @@ except Exception:
     APIError = Exception
     RateLimitError = Exception
 
+try:
+    from artifact_tool import Workbook, SpreadsheetFile
+except Exception:
+    Workbook = None
+    SpreadsheetFile = None
+
 st.set_page_config(
     page_title="Supply Chain AI Copilot",
     page_icon="📦",
@@ -323,7 +329,7 @@ td{{padding:10px;border-bottom:1px solid var(--line);vertical-align:top}}
 <div class="header">
 <h1>{html_lib.escape(title)}</h1>
 <p>{html_lib.escape(subtitle)}</p>
-<div class="meta">Generated {generated} · Supply Chain AI Copilot V1.7</div>
+<div class="meta">Generated {generated} · Supply Chain AI Copilot V1.8</div>
 </div>
 {body}
 <div class="footer">Decision support only. Validate purchase execution and supplier commitments before release.</div>
@@ -515,6 +521,231 @@ def build_management_pack(a, raw, dq, plan):
             b"Open 01_Executive_Report.html first. All reports are self-contained HTML files designed for reading, sharing and printing."
         )
     return buf.getvalue(), reports
+
+
+def _xl_clean(v):
+    if pd.isna(v):
+        return None
+    if isinstance(v, (np.integer,)):
+        return int(v)
+    if isinstance(v, (np.floating,)):
+        return float(v)
+    return v
+
+def _xl_rows(df, columns):
+    return [[_xl_clean(v) for v in row] for row in df[columns].itertuples(index=False, name=None)]
+
+def _xl_title(sheet, title, subtitle, last_col="L"):
+    sheet.merge_cells(f"A1:{last_col}1")
+    sheet.get_range("A1").values = [[title]]
+    sheet.get_range(f"A1:{last_col}1").format = {
+        "fill": "#17365D",
+        "font": {"bold": True, "color": "#FFFFFF", "size": 16},
+        "vertical_alignment": "center",
+    }
+    sheet.get_range("A2").values = [[subtitle]]
+    sheet.get_range(f"A2:{last_col}2").format = {
+        "font": {"italic": True, "color": "#64748B"},
+        "wrap_text": True,
+    }
+
+def _xl_table(sheet, row, col, df, columns, name, currency_cols=None, number_cols=None):
+    values = [columns] + _xl_rows(df, columns)
+    rng = sheet.get_range_by_indexes(row, col, len(values), len(columns))
+    rng.values = values
+    header = sheet.get_range_by_indexes(row, col, 1, len(columns))
+    header.format = {
+        "fill": "#17365D",
+        "font": {"bold": True, "color": "#FFFFFF"},
+        "horizontal_alignment": "center",
+        "vertical_alignment": "center",
+        "wrap_text": True,
+    }
+    rng.format.wrap_text = True
+    sheet.tables.add(rng, True, name)
+
+    currency_cols = set(currency_cols or [])
+    number_cols = set(number_cols or [])
+    for j, c in enumerate(columns):
+        cr = sheet.get_range_by_indexes(row + 1, col + j, max(1, len(values)-1), 1)
+        if c in currency_cols:
+            cr.format.number_format = '€#,##0'
+        elif c in number_cols:
+            cr.format.number_format = '#,##0.0'
+        width = 16
+        if c in {"Description","Reason","Details","Action"}: width = 30
+        if c in {"Supplier","SKU","Owner","Deadline","Status","Confidence"}: width = 18
+        cr.format.column_width = width
+    return rng
+
+def _xl_kpis(sheet, metrics):
+    # metrics: list of (label, value, fill)
+    positions = ["A4:C6","D4:F6","G4:I6","J4:L6"]
+    for (label, value, fill), pos in zip(metrics, positions):
+        sheet.merge_cells(pos)
+        tl = pos.split(":")[0]
+        sheet.get_range(tl).values = [[f"{label}\n{value}"]]
+        sheet.get_range(pos).format = {
+            "fill": fill,
+            "font": {"bold": True, "color": "#0F172A", "size": 16},
+            "horizontal_alignment": "center",
+            "vertical_alignment": "center",
+            "wrap_text": True,
+        }
+
+def _xl_exec(a, raw, dq, plan):
+    wb = Workbook.create()
+    sh = wb.worksheets.add("Executive")
+    _xl_title(sh, "Supply Chain AI — Executive Report",
+              "Dashboard view mirroring the Executive HTML report.", "L")
+    _xl_kpis(sh, [
+        ("Inventory value", f"€{a['Inventory_Value'].sum():,.0f}", "#EAF2FF"),
+        ("Purchase requirement", f"€{a['Purchase_Value'].sum():,.0f}", "#ECFDF5"),
+        ("Service risk", f"€{a['Service_Risk_Value'].sum():,.0f}", "#FEF2F2"),
+        ("Excess exposure", f"€{a['Excess_Inventory_Value'].sum():,.0f}", "#FFF7ED"),
+    ])
+    top = a.sort_values("Decision_Score", ascending=False).head(10)
+    _xl_table(sh, 8, 0, top,
+              ["SKU","Description","Supplier","Status","Action","Action_Timing",
+               "Recommended_Order","Purchase_Value","Days_Cover","Lead_Time_Days"],
+              "ExcelExecutivePriorities",
+              currency_cols=["Purchase_Value"],
+              number_cols=["Recommended_Order","Days_Cover","Lead_Time_Days"])
+    sup = a.groupby("Supplier", as_index=False).agg(
+        Critical=("Status", lambda s: int((s=="🔴 CRITICAL").sum())),
+        Service_Risk=("Service_Risk_Value","sum"),
+        Purchase_Value=("Purchase_Value","sum"),
+        Inventory=("Inventory_Value","sum"),
+    ).sort_values(["Critical","Service_Risk","Purchase_Value"], ascending=[False,False,False])
+    _xl_table(sh, 22, 0, sup, ["Supplier","Critical","Service_Risk","Purchase_Value","Inventory"],
+              "ExcelExecutiveSuppliers",
+              currency_cols=["Service_Risk","Purchase_Value","Inventory"])
+    try:
+        ch = sh.charts.add("bar", sh.get_range(f"A23:E{22+min(len(sup),10)}"))
+        ch.title_text = "Supplier Exposure"
+        ch.set_position("H22","L38")
+    except Exception:
+        pass
+    sh.freeze_panes.freeze_rows(8)
+
+    act = wb.worksheets.add("Action Plan")
+    _xl_title(act, "Weekly Action Plan", "Same planner-ready information as the HTML action plan.", "J")
+    _xl_table(act, 3, 0, plan,
+              ["Priority","SKU","Description","Supplier","Action","Owner","Deadline","Reason","Confidence","Purchase_Value"],
+              "ExcelExecutiveActionPlan", currency_cols=["Purchase_Value"])
+    act.freeze_panes.freeze_rows(4)
+
+    dqsh = wb.worksheets.add("Data Quality")
+    _xl_title(dqsh, "Data Quality", "Same checks as the visual data-quality report.", "E")
+    _xl_table(dqsh, 3, 0, dq, ["Category","Check","Status","Count","Details"],
+              "ExcelExecutiveDQ")
+    dqsh.freeze_panes.freeze_rows(4)
+    return wb
+
+def _xl_detailed(a, raw, dq, plan):
+    wb = Workbook.create()
+
+    inv = wb.worksheets.add("Inventory Risk")
+    _xl_title(inv, "Inventory & Service Risk", "Excess inventory and service-risk exposure.", "K")
+    x = a.sort_values("Excess_Inventory_Value", ascending=False).head(20)
+    _xl_table(inv, 3, 0, x,
+              ["SKU","Description","Supplier","Status","Days_Cover","Lead_Time_Days",
+               "Stock","Open_PO","Excess_Inventory_Qty","Excess_Inventory_Value","Service_Risk_Value"],
+              "ExcelInventoryRisk",
+              currency_cols=["Excess_Inventory_Value","Service_Risk_Value"],
+              number_cols=["Days_Cover","Lead_Time_Days","Stock","Open_PO","Excess_Inventory_Qty"])
+    try:
+        ch = inv.charts.add("bar", inv.get_range("A4:F13"))
+        ch.title_text = "Inventory Risk by SKU"
+        ch.set_position("M4","R20")
+    except Exception:
+        pass
+    inv.freeze_panes.freeze_rows(4)
+
+    pur = wb.worksheets.add("Purchase Plan")
+    _xl_title(pur, "Purchase Plan", "Recommended replenishment by SKU and supplier.", "K")
+    x = a[a["Recommended_Order"] > 0].sort_values("Purchase_Value", ascending=False)
+    _xl_table(pur, 3, 0, x,
+              ["SKU","Description","Supplier","Action","Recommended_Order","Unit_Cost","Purchase_Value",
+               "Days_Cover","Lead_Time_Days","Open_PO","PO_Adequacy"],
+              "ExcelPurchasePlan",
+              currency_cols=["Unit_Cost","Purchase_Value"],
+              number_cols=["Recommended_Order","Days_Cover","Lead_Time_Days","Open_PO"])
+    try:
+        ch = pur.charts.add("bar", pur.get_range("A4:G13"))
+        ch.title_text = "Purchase Exposure"
+        ch.set_position("M4","R20")
+    except Exception:
+        pass
+    pur.freeze_panes.freeze_rows(4)
+
+    act = wb.worksheets.add("Action Plan")
+    _xl_title(act, "Weekly Action Plan", "Owner, timing, reason and confidence.", "J")
+    _xl_table(act, 3, 0, plan,
+              ["Priority","SKU","Description","Supplier","Action","Owner","Deadline","Reason","Confidence","Purchase_Value"],
+              "ExcelDetailedActionPlan", currency_cols=["Purchase_Value"])
+    act.freeze_panes.freeze_rows(4)
+
+    sup = wb.worksheets.add("Supplier Risk")
+    _xl_title(sup, "Supplier Risk", "Risk concentration and economic exposure.", "J")
+    s = a.groupby("Supplier", as_index=False).agg(
+        SKUs=("SKU","count"),
+        Critical=("Status", lambda z: int((z=="🔴 CRITICAL").sum())),
+        Review=("Status", lambda z: int((z=="🟠 REVIEW").sum())),
+        Purchase_Value=("Purchase_Value","sum"),
+        Inventory_Value=("Inventory_Value","sum"),
+        Service_Risk_Value=("Service_Risk_Value","sum"),
+        Excess_Inventory_Value=("Excess_Inventory_Value","sum"),
+    )
+    s["Supplier_Risk_Score"] = s["Critical"]*100 + s["Review"]*40 + np.log1p(s["Service_Risk_Value"])*5 + np.log1p(s["Purchase_Value"])*2
+    s = s.sort_values("Supplier_Risk_Score", ascending=False)
+    _xl_table(sup, 3, 0, s,
+              ["Supplier","SKUs","Critical","Review","Supplier_Risk_Score","Service_Risk_Value",
+               "Purchase_Value","Inventory_Value","Excess_Inventory_Value"],
+              "ExcelSupplierRisk",
+              currency_cols=["Service_Risk_Value","Purchase_Value","Inventory_Value","Excess_Inventory_Value"],
+              number_cols=["SKUs","Critical","Review","Supplier_Risk_Score"])
+    try:
+        ch = sup.charts.add("bar", sup.get_range(f"A4:E{min(4+len(s),13)}"))
+        ch.title_text = "Supplier Risk Score"
+        ch.set_position("K4","Q20")
+    except Exception:
+        pass
+    sup.freeze_panes.freeze_rows(4)
+
+    dqs = wb.worksheets.add("Data Quality")
+    _xl_title(dqs, "Data Quality", "Severity and counts for the current dataset.", "E")
+    _xl_table(dqs, 3, 0, dq, ["Category","Check","Status","Count","Details"], "ExcelDetailedDQ")
+    dqs.freeze_panes.freeze_rows(4)
+    return wb
+
+def _xl_complete(a, raw, dq, plan):
+    wb = _xl_detailed(a, raw, dq, plan)
+    ex = wb.worksheets.add("Executive")
+    _xl_title(ex, "Supply Chain AI — Complete Management Pack",
+              "Executive view plus the same detailed report information available in the HTML pack.", "L")
+    _xl_kpis(ex, [
+        ("Inventory value", f"€{a['Inventory_Value'].sum():,.0f}", "#EAF2FF"),
+        ("Purchase requirement", f"€{a['Purchase_Value'].sum():,.0f}", "#ECFDF5"),
+        ("Service risk", f"€{a['Service_Risk_Value'].sum():,.0f}", "#FEF2F2"),
+        ("Excess exposure", f"€{a['Excess_Inventory_Value'].sum():,.0f}", "#FFF7ED"),
+    ])
+    top = a.sort_values("Decision_Score", ascending=False).head(10)
+    _xl_table(ex, 8, 0, top,
+              ["SKU","Description","Supplier","Status","Action","Action_Timing","Recommended_Order","Purchase_Value"],
+              "ExcelCompleteExec",
+              currency_cols=["Purchase_Value"], number_cols=["Recommended_Order"])
+    src = wb.worksheets.add("Source Data")
+    _xl_title(src, "Source Data", "Original normalized dataset used for the calculations.", "L")
+    _xl_table(src, 3, 0, raw, list(raw.columns), "ExcelSourceData")
+    src.freeze_panes.freeze_rows(4)
+    return wb
+
+def _excel_export_bytes(kind, a, raw, dq, plan):
+    if Workbook is None or SpreadsheetFile is None:
+        raise RuntimeError("artifact_tool is not available. Add artifact_tool to requirements.txt and redeploy.")
+    wb = {"executive": _xl_exec, "detailed": _xl_detailed, "complete": _xl_complete}[kind](a, raw, dq, plan)
+    return SpreadsheetFile.export_xlsx(wb).data
 
 
 def validate(df):
@@ -1147,7 +1378,7 @@ a["Forecast_Change_Pct"] = np.where(
 # Header
 # -----------------------------
 st.title("📦 Supply Chain AI Copilot")
-st.caption("From raw supply-chain data to prioritized decisions · V1.7")
+st.caption("From raw supply-chain data to prioritized decisions · V1.8")
 
 c1,c2,c3,c4,c5,c6 = st.columns(6)
 c1.metric("SKUs", K["sku"])
@@ -1457,7 +1688,7 @@ with tabs[8]:
 # -----------------------------
 with tabs[9]:
     st.subheader("📤 Reporting Center")
-    st.caption("Visual, decision-ready reports designed for management, planning and procurement.")
+    st.caption("Visual HTML reports and professional Excel workbooks containing the same decision-ready information.")
 
     pack_bytes, report_map = build_management_pack(a, raw, dq, plan)
 
@@ -1467,70 +1698,73 @@ with tabs[9]:
     r3.metric("Excess exposure", f"€{a['Excess_Inventory_Value'].sum():,.0f}")
     r4.metric("Actions", len(plan))
 
-    st.markdown("### 1. Executive Report")
-    st.download_button(
-        "📊 Download Executive Report",
-        report_map["01_Executive_Report.html"].encode("utf-8"),
-        "supply_chain_executive_report.html",
-        "text/html",
-        use_container_width=True
-    )
-    st.caption("KPIs, top priorities, supplier exposure, action plan and data quality in one report.")
+    excel_exec = excel_detail = excel_complete = None
+    excel_error = None
+    try:
+        excel_exec = _excel_export_bytes("executive", a, raw, dq, plan)
+        excel_detail = _excel_export_bytes("detailed", a, raw, dq, plan)
+        excel_complete = _excel_export_bytes("complete", a, raw, dq, plan)
+    except Exception as e:
+        excel_error = str(e)
 
-    st.markdown("### 2. Detailed visual reports")
+    st.markdown("### 1. Executive Report")
     c1, c2 = st.columns(2)
     with c1:
         st.download_button(
-            "📊 Inventory & Service Risk Report",
-            report_map["02_Inventory_Risk_Report.html"].encode("utf-8"),
-            "inventory_service_risk_report.html",
-            "text/html",
-            use_container_width=True
-        )
-        st.download_button(
-            "🛒 Purchase Plan Report",
-            report_map["03_Purchase_Plan_Report.html"].encode("utf-8"),
-            "purchase_plan_report.html",
-            "text/html",
-            use_container_width=True
-        )
-        st.download_button(
-            "🚚 Supplier Risk Report",
-            report_map["05_Supplier_Risk_Report.html"].encode("utf-8"),
-            "supplier_risk_report.html",
-            "text/html",
-            use_container_width=True
+            "📊 Executive Report (HTML)",
+            report_map["01_Executive_Report.html"].encode("utf-8"),
+            "supply_chain_executive_report.html",
+            "text/html", use_container_width=True
         )
     with c2:
-        st.download_button(
-            "📝 Weekly Action Plan Report",
-            report_map["04_Action_Plan_Report.html"].encode("utf-8"),
-            "weekly_action_plan_report.html",
-            "text/html",
-            use_container_width=True
-        )
-        st.download_button(
-            "🧹 Data Quality Report",
-            report_map["06_Data_Quality_Report.html"].encode("utf-8"),
-            "data_quality_report.html",
-            "text/html",
-            use_container_width=True
-        )
+        if excel_exec:
+            st.download_button(
+                "📗 Executive Report (Excel)",
+                excel_exec,
+                "supply_chain_executive_report.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True
+            )
+    st.caption("Same executive KPIs and priorities, with editable tables, formatting and charts in Excel.")
+
+    st.markdown("### 2. Detailed visual reports")
+    d1, d2 = st.columns(2)
+    with d1:
+        st.download_button("📊 Inventory & Service Risk (HTML)", report_map["02_Inventory_Risk_Report.html"].encode("utf-8"), "inventory_service_risk_report.html", "text/html", use_container_width=True)
+        st.download_button("🛒 Purchase Plan (HTML)", report_map["03_Purchase_Plan_Report.html"].encode("utf-8"), "purchase_plan_report.html", "text/html", use_container_width=True)
+        st.download_button("🚚 Supplier Risk (HTML)", report_map["05_Supplier_Risk_Report.html"].encode("utf-8"), "supplier_risk_report.html", "text/html", use_container_width=True)
+    with d2:
+        st.download_button("📝 Weekly Action Plan (HTML)", report_map["04_Action_Plan_Report.html"].encode("utf-8"), "weekly_action_plan_report.html", "text/html", use_container_width=True)
+        st.download_button("🧹 Data Quality (HTML)", report_map["06_Data_Quality_Report.html"].encode("utf-8"), "data_quality_report.html", "text/html", use_container_width=True)
+        if excel_detail:
+            st.download_button(
+                "📗 Detailed Reports (Excel)",
+                excel_detail,
+                "supply_chain_detailed_reports.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True
+            )
+    st.caption("The Excel workbook mirrors the five detailed reports as separate formatted sheets, including charts where useful.")
 
     st.markdown("### 3. Complete Management Pack")
-    st.download_button(
-        "📦 Download Management Pack (ZIP)",
-        pack_bytes,
-        "supply_chain_management_pack_v17.zip",
-        "application/zip",
-        use_container_width=True
-    )
-    st.caption("Six self-contained HTML reports + README. Open the Executive Report first.")
+    p1, p2 = st.columns(2)
+    with p1:
+        st.download_button("📦 Management Pack (ZIP)", pack_bytes, "supply_chain_management_pack_v17.zip", "application/zip", use_container_width=True)
+    with p2:
+        if excel_complete:
+            st.download_button(
+                "📗 Complete Management Pack (Excel)",
+                excel_complete,
+                "supply_chain_complete_management_pack.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True
+            )
+    st.caption("The Excel pack combines the executive dashboard, all detailed report sheets and the normalized source data in one workbook.")
 
-    st.info(
-        "The previous raw CSV exports have been removed from the main reporting workflow. "
-        "Reports are now formatted for direct reading, sharing and printing."
-    )
+    if excel_error:
+        st.warning(f"Excel export unavailable: {excel_error}")
+
+    st.info("Raw CSV exports remain removed from the reporting workflow. HTML and Excel are now the primary shareable outputs.")
 
 
 st.divider()
