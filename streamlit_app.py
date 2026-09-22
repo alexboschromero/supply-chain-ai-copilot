@@ -2421,7 +2421,9 @@ def _mrp_round_qty(qty, lot_size):
     return math.ceil(qty/lot)*lot if lot>0 else qty
 
 def run_mrp(raw, full_analysis, bom, parent_skus=None, horizon=6, demand_growth=0.0, production_safety_days=5, use_open_po=True):
-    if bom is None or bom.empty: return pd.DataFrame(), pd.DataFrame(), {"parents":0,"components":0,"shortages":0,"purchase":0.0}
+    empty_mps_cols=["Parent_SKU","Period","Gross_Requirement","Planned_Production"]
+    empty_mrp_cols=["Component_SKU","Period","Opening_Inventory","Gross_Requirement","Scheduled_Receipts","Net_Requirement","Planned_Order_Receipt","Projected_Ending_Inventory","Shortage","Supplier","Lead_Time_Days","MOQ","Unit_Cost","Planned_Purchase_Value","Release_Period","Action","MRP_Type"]
+    if bom is None or bom.empty: return pd.DataFrame(columns=empty_mps_cols), pd.DataFrame(columns=empty_mrp_cols), {"parents":0,"components":0,"shortages":0,"purchase":0.0}
     b=bom.copy()
     master=full_analysis.copy()
     master["SKU"]=master["SKU"].astype(str)
@@ -2430,7 +2432,7 @@ def run_mrp(raw, full_analysis, bom, parent_skus=None, horizon=6, demand_growth=
     else:
         parents=sorted(b["Parent_SKU"].unique().tolist())
     parents=[p for p in parents if p in set(b["Parent_SKU"])]
-    if not parents: return pd.DataFrame(), pd.DataFrame(), {"parents":0,"components":0,"shortages":0,"purchase":0.0}
+    if not parents: return pd.DataFrame(columns=empty_mps_cols), pd.DataFrame(columns=empty_mrp_cols), {"parents":0,"components":0,"shortages":0,"purchase":0.0}
     periods=[]
     available_periods = _periods_from_raw(raw)
     if available_periods:
@@ -2458,7 +2460,7 @@ def run_mrp(raw, full_analysis, bom, parent_skus=None, horizon=6, demand_growth=
             if i>0: planned=demand
             mps.append({"Parent_SKU":p,"Period":period,"Gross_Requirement":demand,"Planned_Production":planned})
     mps_df=pd.DataFrame(mps)
-    if mps_df.empty: return pd.DataFrame(), pd.DataFrame(), {"parents":0,"components":0,"shortages":0,"purchase":0.0}
+    if mps_df.empty: return pd.DataFrame(columns=empty_mps_cols), pd.DataFrame(columns=empty_mrp_cols), {"parents":0,"components":0,"shortages":0,"purchase":0.0}
     # Explode MPS through BOM.
     merged=mps_df.merge(b[["Parent_SKU","Component_SKU","Effective_Qty_Per"]],on="Parent_SKU",how="inner")
     merged["Gross_Requirement"]=merged["Planned_Production"]*merged["Effective_Qty_Per"]
@@ -4128,12 +4130,17 @@ with tabs[8]:
         else:
             mps_df,mrp_df,mrp_meta=result
             st.markdown(f"### 📊 {tr('Manufacturing KPIs')}")
+            # Defensive checks: a valid MRP run can still return no planned orders/components.
+            if "Planned_Production" not in mps_df.columns:
+                mps_df = pd.DataFrame(columns=["Parent_SKU","Period","Gross_Requirement","Planned_Production"])
+            if "Gross_Requirement" not in mrp_df.columns:
+                mrp_df = pd.DataFrame(columns=["Component_SKU","Period","Gross_Requirement","Net_Requirement","Planned_Order_Receipt","Shortage","Planned_Purchase_Value","Supplier","Lead_Time_Days","MOQ"])
             k1,k2,k3,k4,k5=st.columns(5)
-            k1.metric(tr("Manufacturing orders"), f"{int((mps_df['Planned_Production']>0).sum()):,}")
-            k2.metric(tr("Components"), f"{mrp_meta['components']:,}")
-            k3.metric(tr("Components with shortage"), f"{mrp_meta['shortages']:,}")
-            k4.metric(tr("Total component requirement"), f"{mrp_df['Gross_Requirement'].sum():,.0f}")
-            k5.metric(tr("Total planned purchase"), f"€{mrp_meta['purchase']:,.0f}")
+            k1.metric(tr("Manufacturing orders"), f"{int((pd.to_numeric(mps_df['Planned_Production'], errors='coerce').fillna(0)>0).sum()):,}")
+            k2.metric(tr("Components"), f"{mrp_meta.get('components',0):,}")
+            k3.metric(tr("Components with shortage"), f"{mrp_meta.get('shortages',0):,}")
+            k4.metric(tr("Total component requirement"), f"{pd.to_numeric(mrp_df['Gross_Requirement'], errors='coerce').fillna(0).sum():,.0f}")
+            k5.metric(tr("Total planned purchase"), f"€{mrp_meta.get('purchase',0.0):,.0f}")
 
             if not mrp_df.empty:
                 st.markdown(f"### 🏭 {tr('Planned production')}")
