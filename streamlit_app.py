@@ -1,5 +1,6 @@
 
 import io, os, math
+from datetime import date, timedelta
 from pathlib import Path
 import pandas as pd
 import numpy as np
@@ -100,6 +101,47 @@ def analyze(df, safety_days=10, service_level=0.95):
     ]
     a["Purchase_Value"] = a["Recommended_Order"] * a["Unit_Cost"]
 
+    # Action timing / urgency
+    a["Days_To_Stockout"] = a["Days_Cover"]
+    a["Lead_Time_Gap_Days"] = a["Days_Cover"] - a["Lead_Time_Days"]
+    a["Stockout_Buffer_Days"] = a["Days_Cover"] - a["Lead_Time_Days"]
+
+    def action(r):
+        if r["Status"] == "🔴 CRITICAL":
+            return "BUY_NOW"
+        if r["Status"] == "🟠 REVIEW":
+            if r["Days_Cover"] <= r["Lead_Time_Days"] + 7:
+                return "CONFIRM_PO"
+            return "REVIEW"
+        if r["Status"] == "🟡 EXCESS":
+            return "DO_NOT_BUY"
+        return "MONITOR"
+
+    def timing(r):
+        if r["Action"] == "BUY_NOW":
+            return "Immediate"
+        if r["Action"] == "CONFIRM_PO":
+            return "This week"
+        if r["Action"] == "REVIEW":
+            return "Next planning cycle"
+        if r["Action"] == "DO_NOT_BUY":
+            return "Block replenishment"
+        return "Monitor"
+
+    def confidence(r):
+        # Confidence is intentionally transparent: based on demand history and data completeness.
+        if r["Annual_Sales"] <= 0:
+            return "LOW"
+        if r["Demand_CV"] <= 0.25:
+            return "HIGH"
+        if r["Demand_CV"] <= 0.50:
+            return "MEDIUM"
+        return "LOW"
+
+    a["Action"] = a.apply(action, axis=1)
+    a["Action_Timing"] = a.apply(timing, axis=1)
+    a["Decision_Confidence"] = a.apply(confidence, axis=1)
+
     def status(r):
         if r["Stock"] < r["Lead_Time_Demand"]:
             return "🔴 CRITICAL"
@@ -141,26 +183,52 @@ def kpis(a):
 
 def decision_text(a):
     top = a.sort_values("Decision_Score", ascending=False).head(10)
-    lines = ["### Prioridades de esta semana"]
-    for _, r in top.iterrows():
-        if r["Status"] == "🔴 CRITICAL":
-            action = f"Comprar {r['Recommended_Order']:.0f} uds."
-        elif r["Status"] == "🟠 REVIEW":
-            action = f"Revisar reposición; sugerencia {r['Recommended_Order']:.0f} uds."
-        elif r["Status"] == "🟡 EXCESS":
-            action = "Revisar exceso / aplazar compra."
+    lines = [
+        "### Prioridades de esta semana",
+        "",
+        "| Prioridad | SKU | Acción | Timing | Cantidad | Riesgo | Confianza |",
+        "|---|---|---|---|---:|---|---|"
+    ]
+    for i, (_, r) in enumerate(top.iterrows(), start=1):
+        if r["Action"] == "BUY_NOW":
+            action = "Comprar ahora"
+        elif r["Action"] == "CONFIRM_PO":
+            action = "Confirmar PO"
+        elif r["Action"] == "DO_NOT_BUY":
+            action = "No comprar"
+        elif r["Action"] == "REVIEW":
+            action = "Revisar"
         else:
-            action = "Mantener política."
+            action = "Monitorizar"
+
+        qty = f"{r['Recommended_Order']:.0f}" if r["Recommended_Order"] > 0 else "—"
+        risk = f"{r['Days_Cover']:.1f}d cover / {r['Lead_Time_Days']:.0f}d LT"
         lines.append(
-            f"- **{r['SKU']} — {r['Description']}**: {action} "
-            f"(cobertura {r['Days_Cover']:.1f} días; proveedor {r['Supplier']})."
+            f"| {i} | **{r['SKU']}** | {action} | {r['Action_Timing']} | "
+            f"{qty} | {risk} | {r['Decision_Confidence']} |"
         )
+
+    critical = a[a["Action"] == "BUY_NOW"].copy()
+    excess = a[a["Action"] == "DO_NOT_BUY"].copy()
+    purchase_value = float(a["Purchase_Value"].sum())
+    excess_value = float(excess["Inventory_Value"].sum())
+
+    lines += [
+        "",
+        f"**Compra recomendada total:** €{purchase_value:,.0f}",
+        f"**Inventario actualmente en exceso:** €{excess_value:,.0f}",
+    ]
+
+    if not critical.empty:
+        lines.append("")
+        lines.append("**Acción inmediata:** emitir/validar pedidos de los SKUs `BUY_NOW` y confirmar fecha de entrega con el proveedor.")
     return "\n".join(lines)
 
 def build_context(a):
     cols = [
         "SKU","Description","Supplier","Status","Stock","Open_PO",
-        "Days_Cover","Lead_Time_Days","Recommended_Order","Purchase_Value",
+        "Days_Cover","Lead_Time_Days","Lead_Time_Gap_Days","Action","Action_Timing","Decision_Confidence",
+        "Recommended_Order","Purchase_Value",
         "Forecast_Next_Month","Forecast_Change_Pct" if "Forecast_Change_Pct" in a else "Forecast_Next_Month",
         "ABC_XYZ","Inventory_Value","Demand_CV"
     ]
@@ -296,12 +364,15 @@ def ai_chat(question, a, api_key=None, model="gpt-5.6-luna"):
         response = client.responses.create(
             model=model,
             instructions=(
-                "Eres el Supply Chain AI Copilot de una empresa. Responde en español. "
-                "Usa exclusivamente los datos proporcionados. No inventes números. "
-                "Primero resume los hechos y luego recomienda acciones concretas. "
-                "Prioriza riesgo de stockout, impacto económico y nivel de servicio. "
-                "Si faltan datos, dilo. No ejecutes compras: prepara recomendaciones "
-                "para validación humana."
+                "Eres un Supply Chain Decision Copilot senior. Responde en español, "
+                "de forma ejecutiva y accionable. Usa exclusivamente los datos proporcionados. "
+                "No inventes números ni proveedores, y no conviertas una inferencia en un hecho. "
+                "Para preguntas de compra, estructura la respuesta en: 1) resumen ejecutivo, "
+                "2) tres prioridades, 3) plan de compra/acción, 4) riesgos y supuestos. "
+                "Usa Action, Action_Timing y Decision_Confidence cuando existan. "
+                "Si un SKU tiene PO abierta, prioriza confirmar la PO antes de recomendar otra compra. "
+                "Si está en DO_NOT_BUY, explica el exceso y evita recomendar compra. "
+                "No ejecutes compras: prepara recomendaciones para validación humana."
             ),
             input=f"PREGUNTA:\n{question}\n\nDATOS CALCULADOS:\n{context}",
         )
@@ -495,10 +566,25 @@ with tabs[0]:
     top = a.sort_values("Decision_Score", ascending=False).head(15)
     st.dataframe(
         top[[
-            "SKU","Description","Supplier","Status","Days_Cover",
-            "Lead_Time_Days","Recommended_Order","Purchase_Value","Decision_Score"
+            "SKU","Description","Supplier","Status","Action","Action_Timing",
+            "Decision_Confidence","Days_Cover","Lead_Time_Days",
+            "Recommended_Order","Purchase_Value","Decision_Score"
         ]],
         use_container_width=True, hide_index=True
+    )
+
+    critical_value = float(a.loc[a["Action"]=="BUY_NOW", "Inventory_Value"].sum())
+    excess_value = float(a.loc[a["Action"]=="DO_NOT_BUY", "Inventory_Value"].sum())
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Critical inventory exposure", f"€{critical_value:,.0f}")
+    m2.metric("Excess inventory", f"€{excess_value:,.0f}")
+    m3.metric("Immediate actions", int((a["Action"].isin(["BUY_NOW","CONFIRM_PO"])).sum()))
+
+    st.subheader("Why these actions?")
+    st.info(
+        "The engine treats a SKU as BUY_NOW when on-hand stock is below lead-time demand. "
+        "REVIEW/CONFIRM_PO cases are handled separately to avoid double ordering when an open PO already exists. "
+        "DO_NOT_BUY cases are flagged when coverage is materially above the policy threshold."
     )
 
     st.subheader("Purchase plan by supplier")
@@ -523,7 +609,7 @@ with tabs[1]:
         a[[
             "SKU","Description","Supplier","Status","Stock","Open_PO",
             "Days_Cover","Safety_Stock","Recommended_Order",
-            "Inventory_Value","ABC_XYZ"
+            "Inventory_Value","ABC_XYZ","Action","Action_Timing","Decision_Confidence"
         ]],
         use_container_width=True, hide_index=True
     )
