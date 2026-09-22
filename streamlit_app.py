@@ -3256,8 +3256,17 @@ def _filterable_dataframe(data, *args, **kwargs):
             rows_label = "Filas mostradas" if is_es else "Rows shown"
             st.caption(f"{rows_label}: {len(df):,} / {len(df_original):,}")
 
-    # Preserve any explicit dataframe key supplied by the caller. If none is
-    # supplied, let Streamlit generate the dataframe element id naturally.
+    # IMPORTANT: because st.dataframe is monkey-patched, every call reaches
+    # _original_st_dataframe from this same wrapper line. Without an explicit
+    # unique key Streamlit therefore sees different tables as the same element
+    # and raises StreamlitDuplicateElementKey. Always provide a deterministic
+    # unique dataframe key based on the original call site + occurrence.
+    caller_key = kwargs.pop("key", None)
+    if caller_key is not None:
+        dataframe_key = f"__scai_dataframe__{str(caller_key)}__{table_id}"
+    else:
+        dataframe_key = f"__scai_dataframe__{table_id}"
+    kwargs["key"] = dataframe_key
     return _original_st_dataframe(localize_df(df), *args, **kwargs)
 
 st.dataframe = _filterable_dataframe
