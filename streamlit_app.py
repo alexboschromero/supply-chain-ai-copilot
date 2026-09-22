@@ -663,7 +663,7 @@ _REPORT_TRANSLATIONS_ES = {
     "Planner-ready operational worklist with ownership and deadlines.":"Lista operativa preparada para el planner, con responsables y fechas límite.",
     "Supplier concentration, service exposure and purchasing exposure.":"Concentración de proveedores, exposición de servicio y exposición de compras.",
     "Generated":"Generado", "Decision support only. Validate purchase execution and supplier commitments before release.":"Solo para soporte a la decisión. Valida la ejecución de compras y los compromisos de los proveedores antes de su liberación.",
-    "Supply Chain AI Copilot V2.0.17":"Supply Chain AI Copilot V2.0.17",
+    "Supply Chain AI Copilot V2.0.19":"Supply Chain AI Copilot V2.0.19",
     "No comparable periods are available.":"No hay periodos comparables disponibles.",
 }
 
@@ -716,7 +716,7 @@ td{{padding:10px;border-bottom:1px solid var(--line);vertical-align:top}}
 <div class="header">
 <h1>{html_lib.escape(title)}</h1>
 <p>{html_lib.escape(subtitle)}</p>
-<div class="meta">Generated {generated} · Supply Chain AI Copilot V2.0.17</div>
+<div class="meta">Generated {generated} · Supply Chain AI Copilot V2.0.19</div>
 </div>
 {body}
 <div class="footer">Decision support only. Validate purchase execution and supplier commitments before release.</div>
@@ -2580,7 +2580,7 @@ _TRANSLATIONS = {
         "Generate reports": "Generar informes",
         "Generating reports...": "Generando informes...",
         "Generate reports to create the HTML and Excel downloads. This avoids heavy report generation on every interaction.": "Genera los informes para crear las descargas HTML y Excel. Esto evita generar informes pesados en cada interacción.",
-        "Decision Intelligence for planners · V2.0.17": "Inteligencia de decisiones para planners · V2.0.17",
+        "Decision Intelligence for planners · V2.0.19": "Inteligencia de decisiones para planners · V2.0.19",
         "Historical demand and inventory": "Histórico de demanda e inventario",
         "Upload historical demand and inventory data for analysis. CSV and Excel are supported.": "Carga datos históricos de demanda e inventario para ejecutar el análisis. Se admiten CSV y Excel.",
         "Safety stock floor (days)": "Stock de seguridad mínimo (días)",
@@ -2911,8 +2911,8 @@ _TRANSLATIONS["Spanish"].update({
     "The MVP forecast uses a weighted average of the last 6 months plus a linear trend. The next iteration can add seasonality, intermittent demand and alternative models.": "El forecast del MVP utiliza una media ponderada de los últimos 6 meses más una tendencia lineal. La siguiente iteración puede añadir estacionalidad, demanda intermitente y modelos alternativos.",
     "HTML and Excel use the current filtered view. HTML includes KPIs and an executive presentation; Excel includes Summary, Action Plan and Supplier Summary with filters.": "HTML y Excel utilizan la vista filtrada actual. HTML incluye KPIs y una presentación ejecutiva; Excel incluye Summary, Action Plan y Supplier Summary con filtros.",
     "Need at least two historical periods to compare evolution.": "Se necesitan al menos dos periodos históricos para comparar la evolución.",
-    "📦 Supply Chain AI Copilot V2.0.17 — recommendations require planner validation before execution.": "📦 Supply Chain AI Copilot V2.0.17 — las recomendaciones requieren validación del planner antes de su ejecución.",
-    "Supply Chain AI Copilot V2.0.17 — recommendations require planner validation before execution.": "Supply Chain AI Copilot V2.0.17 — las recomendaciones requieren validación del planner antes de su ejecución.",
+    "📦 Supply Chain AI Copilot V2.0.19 — recommendations require planner validation before execution.": "📦 Supply Chain AI Copilot V2.0.19 — las recomendaciones requieren validación del planner antes de su ejecución.",
+    "Supply Chain AI Copilot V2.0.19 — recommendations require planner validation before execution.": "Supply Chain AI Copilot V2.0.19 — las recomendaciones requieren validación del planner antes de su ejecución.",
     "Safety stock floor": "Stock de seguridad mínimo", "Service level target": "Objetivo de nivel de servicio",
     "Language": "Idioma", "rows": "filas", "suppliers": "proveedores", "units": "unidades", "Fingerprint": "Huella",
     "Executive": "Ejecutivo", "Action Plan": "Plan de acción", "Data Quality": "Calidad de datos", "Inventory Risk": "Riesgo de inventario",
@@ -3060,7 +3060,7 @@ div[data-testid="stExpander"] { border-radius: 12px; }
 # -----------------------------
 with st.sidebar:
     st.markdown("## 📦 Supply Chain AI")
-    st.caption(tr("Decision Intelligence for planners · V2.0.17"))
+    st.caption(tr("Decision Intelligence for planners · V2.0.19"))
 
     language_choice = st.selectbox(f"🌐 {tr('Language')}", ["English", "Español"], index=0 if st.session_state.language == "English" else 1, key="language_selector")
     st.session_state.language = "English" if language_choice == "English" else "Spanish"
@@ -3169,7 +3169,7 @@ def _excel_tab_export_bytes(title, sheets, kpis=None):
         summary = wb.add_worksheet(tr("Summary"))
         summary.hide_gridlines(2)
         summary.write(0, 0, title, title_fmt)
-        summary.write(1, 0, "Exported from Supply Chain AI Copilot V2.0.17", subtitle_fmt)
+        summary.write(1, 0, "Exported from Supply Chain AI Copilot V2.0.19", subtitle_fmt)
         if kpis:
             summary.write(3, 0, "Key metrics", header_fmt)
             for i, (label, value) in enumerate(kpis.items(), start=4):
@@ -4199,8 +4199,24 @@ with tabs[8]:
                     st.dataframe(ex,use_container_width=True,hide_index=True)
 
                 st.markdown(f"### 📅 {tr('MRP results')}")
-                detail=mrp_df.copy()
-                detail.columns=[tr("Component SKU"),tr("Period"),tr("Opening inventory"),tr("Gross requirements"),tr("Scheduled receipts"),tr("Net requirements"),tr("Planned order receipts"),tr("Projected ending inventory"),tr("Shortage"),tr("Supplier"),tr("Lead time"),tr("MOQ"),tr("Unit cost"),tr("Total planned purchase"),tr("Release Period"),tr("Action")]
+                # Keep the UI detail view aligned with the MRP engine schema.
+                # MRP also stores the internal MRP_Type column, which is intentionally
+                # excluded from the planner-facing table. Reindexing avoids a
+                # ValueError when the internal schema contains additional columns.
+                detail_cols = [
+                    "Component_SKU","Period","Opening_Inventory","Gross_Requirement",
+                    "Scheduled_Receipts","Net_Requirement","Planned_Order_Receipt",
+                    "Projected_Ending_Inventory","Shortage","Supplier","Lead_Time_Days",
+                    "MOQ","Unit_Cost","Planned_Purchase_Value","Release_Period","Action"
+                ]
+                detail = mrp_df.reindex(columns=detail_cols).copy()
+                detail.columns=[
+                    tr("Component SKU"),tr("Period"),tr("Opening inventory"),
+                    tr("Gross requirements"),tr("Scheduled receipts"),tr("Net requirements"),
+                    tr("Planned order receipts"),tr("Projected ending inventory"),tr("Shortage"),
+                    tr("Supplier"),tr("Lead time"),tr("MOQ"),tr("Unit cost"),
+                    tr("Total planned purchase"),tr("Release Period"),tr("Action")
+                ]
                 st.dataframe(detail,use_container_width=True,hide_index=True)
 
                 mrp_export=_mrp_export_bytes(mps_df,mrp_df,mrp_meta,st.session_state.language)
@@ -4685,4 +4701,4 @@ with tabs[13]:
         st.info("Raw CSV exports remain removed from the reporting workflow. HTML and Excel are now the primary shareable outputs.")
 
 st.divider()
-st.caption(tr("Supply Chain AI Copilot V2.0.17 — recommendations require planner validation before execution."))
+st.caption(tr("Supply Chain AI Copilot V2.0.19 — recommendations require planner validation before execution."))
