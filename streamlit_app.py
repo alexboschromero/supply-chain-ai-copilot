@@ -1,5 +1,5 @@
 
-import io, os, math, html as html_lib, zipfile, inspect, hashlib, inspect
+import io, os, math, html as html_lib, zipfile
 from datetime import date, timedelta, datetime
 from pathlib import Path
 import pandas as pd
@@ -663,7 +663,7 @@ _REPORT_TRANSLATIONS_ES = {
     "Planner-ready operational worklist with ownership and deadlines.":"Lista operativa preparada para el planner, con responsables y fechas límite.",
     "Supplier concentration, service exposure and purchasing exposure.":"Concentración de proveedores, exposición de servicio y exposición de compras.",
     "Generated":"Generado", "Decision support only. Validate purchase execution and supplier commitments before release.":"Solo para soporte a la decisión. Valida la ejecución de compras y los compromisos de los proveedores antes de su liberación.",
-    "Supply Chain AI Copilot V2.0.30":"Supply Chain AI Copilot V2.0.30",
+    "Supply Chain AI Copilot V2.0.20":"Supply Chain AI Copilot V2.0.20",
     "No comparable periods are available.":"No hay periodos comparables disponibles.",
 }
 
@@ -716,7 +716,7 @@ td{{padding:10px;border-bottom:1px solid var(--line);vertical-align:top}}
 <div class="header">
 <h1>{html_lib.escape(title)}</h1>
 <p>{html_lib.escape(subtitle)}</p>
-<div class="meta">Generated {generated} · Supply Chain AI Copilot V2.0.30</div>
+<div class="meta">Generated {generated} · Supply Chain AI Copilot V2.0.20</div>
 </div>
 {body}
 <div class="footer">Decision support only. Validate purchase execution and supplier commitments before release.</div>
@@ -2253,160 +2253,124 @@ def agent_local_response(question, a, comparison=None, comparison_meta=None, raw
     return "\n".join(lines)
 
 def build_context(a):
-    """Backward-compatible compact context builder.
-    The Copilot should never receive the full SKU universe by default.
-    """
     cols = [
         "SKU","Description","Supplier","Status","Stock","Open_PO",
-        "Days_Cover","Lead_Time_Days","Lead_Time_Gap_Days","Action","Action_Timing",
-        "Decision_Confidence","Recommended_Order","Purchase_Value",
-        "Forecast_Next_Month","Forecast_Change_Pct","ABC_XYZ","Inventory_Value","Demand_CV"
+        "Days_Cover","Lead_Time_Days","Lead_Time_Gap_Days","Action","Action_Timing","Decision_Confidence",
+        "Recommended_Order","Purchase_Value",
+        "Forecast_Next_Month","Forecast_Change_Pct" if "Forecast_Change_Pct" in a else "Forecast_Next_Month",
+        "ABC_XYZ","Inventory_Value","Demand_CV"
     ]
-    cols = [c for c in dict.fromkeys(cols) if c in a.columns]
+    cols = list(dict.fromkeys([c for c in cols if c in a.columns]))
     return a[cols].round(2).to_csv(index=False)
 
-def build_copilot_context(question, a, max_rows=35):
-    """Build a small, question-relevant context instead of sending all SKUs.
+def _make_openai_client(api_key):
+    """Create an OpenAI client using Streamlit Secrets or environment settings."""
+    kwargs = {"api_key": api_key.strip()}
 
-    This is intentionally deterministic and local: 5,000 SKUs are reduced to a
-    compact evidence set before any OpenAI call. Tool results remain the primary
-    source of KPI summaries and ranked priorities.
-    """
-    if a is None or a.empty:
-        return "No SKU-level context available."
+    project_id = os.getenv("OPENAI_PROJECT_ID", "").strip()
+    org_id = os.getenv("OPENAI_ORG_ID", "").strip()
+    try:
+        project_id = project_id or str(st.secrets.get("OPENAI_PROJECT_ID", "")).strip()
+        org_id = org_id or str(st.secrets.get("OPENAI_ORG_ID", "")).strip()
+    except Exception:
+        pass
 
-    q = str(question or "").lower()
-    x = a.copy()
-    score = pd.Series(0.0, index=x.index)
+    if project_id:
+        kwargs["project"] = project_id
+    if org_id:
+        kwargs["organization"] = org_id
 
-    # Intent-driven relevance. This is deliberately simple and transparent.
-    if any(k in q for k in ["compr", "purchase", "buy", "orden", "po", "reponer"]):
-        score += x["Purchase_Value"].fillna(0).rank(pct=True) * 5
-    if any(k in q for k in ["riesgo", "risk", "rotura", "stockout", "servicio", "service", "critical"]):
-        score += x["Service_Risk_Value"].fillna(0).rank(pct=True) * 6
-        if "Status" in x:
-            score += x["Status"].astype(str).str.contains("CRITICAL|CRÍTICO", case=False, regex=True).astype(float) * 3
-    if any(k in q for k in ["exceso", "excess", "sobrestock", "inventory", "inventario", "capital"]):
-        score += x["Excess_Inventory_Value"].fillna(0).rank(pct=True) * 6
-    if any(k in q for k in ["proveedor", "supplier", "vendor"]):
-        score += x["Service_Risk_Value"].fillna(0).rank(pct=True) * 2 + x["Purchase_Value"].fillna(0).rank(pct=True) * 2
-    if any(k in q for k in ["forecast", "demanda", "demand", "previsión", "tendencia", "trend"]):
-        score += x["Forecast_Change_Pct"].abs().fillna(0).rank(pct=True) * 5
-    if any(k in q for k in ["cover", "cobertura", "lead time", "lead-time"]):
-        score += (-x["Days_Cover"].replace([np.inf, -np.inf], np.nan).fillna(999)).rank(pct=True) * 3
+    return OpenAI(**kwargs)
 
-    # Explicit SKU mentions get top priority.
-    q_upper = str(question or "").upper()
-    if "SKU" in x.columns:
-        explicit = x["SKU"].astype(str).str.upper().apply(lambda sku: sku in q_upper)
-        score += explicit.astype(float) * 100
+def _openai_error_info(exc):
+    status = getattr(exc, "status_code", None)
+    body = getattr(exc, "body", None)
+    code = None
+    error_type = None
 
-    # Always retain the highest decision-score rows as a safety net.
-    if "Decision_Score" in x.columns:
-        score += x["Decision_Score"].fillna(0).rank(pct=True) * 2
+    if isinstance(body, dict):
+        payload = body.get("error", body)
+        if isinstance(payload, dict):
+            code = payload.get("code")
+            error_type = payload.get("type")
 
-    x["_copilot_score"] = score
-    x = x.sort_values("_copilot_score", ascending=False).head(max_rows).drop(columns=["_copilot_score"])
+    return status, code, error_type
 
-    cols = [
-        "SKU","Description","Supplier","Status","Stock","Open_PO",
-        "Days_Cover","Lead_Time_Days","Action","Action_Timing","Decision_Confidence",
-        "Recommended_Order","Purchase_Value","Forecast_Next_Month","Forecast_Change_Pct",
-        "ABC_XYZ","Inventory_Value","Demand_CV","Service_Risk_Value","Excess_Inventory_Value"
-    ]
-    cols = [c for c in cols if c in x.columns]
-    return x[cols].round(2).to_csv(index=False)
+def test_openai_connection(api_key, model):
+    if not api_key:
+        return False, ("No OPENAI_API_KEY configured." if st.session_state.get("language", "English") == "English" else "No hay API key configurada."), {}
+    if OpenAI is None:
+        return False, ("The OpenAI library is not installed." if st.session_state.get("language", "English") == "English" else "La librería OpenAI no está instalada."), {}
 
-def _copilot_fallback_response(question, a, comparison=None, comparison_meta=None, raw=None, reason=None):
-    """Return a useful local answer whenever OpenAI is unavailable or rate-limited."""
-    lang = st.session_state.get("language", "English")
-    local = agent_local_response(question, a, comparison, comparison_meta, raw)
-    if lang == "English":
-        note = (
-            "### ⚠️ AI service temporarily unavailable\n"
-            "The OpenAI service could not process this request, so the Copilot switched to its local Supply Chain analysis. "
-            "Your data and calculations are still available."
+    try:
+        client = _make_openai_client(api_key)
+
+        # Authentication/permissions test independent from the selected model.
+        client.models.list()
+
+        # Small Responses API smoke test.
+        response = client.responses.create(
+            model=model,
+            input=("Respond only: connection OK" if st.session_state.get("language", "English") == "English" else "Responde únicamente: conexión OK")
         )
-    else:
-        note = (
-            "### ⚠️ Servicio de IA temporalmente no disponible\n"
-            "El servicio de OpenAI no ha podido procesar esta petición, por lo que el Copilot ha cambiado al análisis local de Supply Chain. "
-            "Tus datos y cálculos siguen disponibles."
-        )
-    return note + "\n\n" + local
+        return True, response.output_text, {}
 
-def _is_rate_limit_error(exc):
-    status, code, error_type = _openai_error_info(exc)
-    text = str(exc).lower()
-    return (
-        status == 429 or
-        code in {"rate_limit_exceeded", "insufficient_quota"} or
-        error_type == "tokens" or
-        "rate_limit" in text or
-        "insufficient_quota" in text or
-        "429" in text
-    )
+    except Exception as exc:
+        status, code, error_type = _openai_error_info(exc)
+        return False, str(exc), {
+            "http_status": status,
+            "error_code": code,
+            "error_type": error_type,
+            "exception": type(exc).__name__,
+        }
 
 def ai_chat(question, a, api_key=None, model="gpt-5.6-luna", comparison=None, comparison_meta=None, raw=None):
     tool_results = route_agent(question, a, comparison, comparison_meta, raw)
 
-    # No key / no SDK: use the deterministic local agent.
     if not api_key or OpenAI is None:
         return agent_local_response(question, a, comparison, comparison_meta, raw)
 
     try:
         client = _make_openai_client(api_key)
-        # IMPORTANT: never send the complete 5,000-SKU table. The local routing
-        # layer selects a small, question-relevant evidence set first.
-        context = build_copilot_context(question, a, max_rows=35)
+        context = build_context(a)
         response = client.responses.create(
             model=model,
             instructions=(
                 (
                     "You are a senior Supply Chain agent. Respond in English and operationally. "
-                    "Use the structured tool results and relevant SKU context. Do not invent numbers. Do not execute purchases. "
+                    "Use the structured tool results. Do not invent numbers. Do not execute purchases. "
                     "For purchasing distinguish BUY_NOW from CONFIRM_PO. If an open PO exists, validate its adequacy before recommending a new purchase. "
                     "For excess quantify potentially releasable inventory value. For service quantify exposed units and value. "
                     "For suppliers explain risk concentration. For forecast highlight changes that may alter decisions. "
                     "For logistics KPIs use the logistics_kpis tool and clearly distinguish lead-time coverage from OTIF/fill rate. "
                     "For comparisons explain what improved, worsened or changed action between periods and quantify deltas. "
-                    "For executive questions use: Summary → Top 3 priorities → Actions → Risks/Assumptions. "
-                    "If the supplied context is insufficient, say so rather than inventing information."
+                    "For executive questions use: Summary → Top 3 priorities → Actions → Risks/Assumptions."
                 ) if st.session_state.get("language", "English") == "English" else (
                     "Eres un agente senior de Supply Chain. Responde en español y de forma operativa. "
-                    "Usa los resultados estructurados de las herramientas y el contexto relevante de SKU. No inventes números. No ejecutes compras. "
+                    "Usa los resultados estructurados de las herramientas. No inventes números. No ejecutes compras. "
                     "Para compras distingue BUY_NOW de CONFIRM_PO. Si existe una PO abierta, confirma su adecuación antes de recomendar una nueva compra. "
                     "Para exceso cuantifica el valor de inventario potencialmente liberable. Para servicio cuantifica unidades y valor expuesto. "
                     "Para proveedores explica la concentración de riesgo. Para forecast señala cambios que puedan modificar decisiones. "
                     "Para KPIs logísticos usa la herramienta logistics_kpis y distingue claramente cobertura de lead time de OTIF/fill rate. "
                     "Para comparación explica qué ha mejorado, empeorado o cambiado de acción entre periodos y cuantifica los deltas. "
-                    "En preguntas ejecutivas: Resumen → Top 3 prioridades → Acciones → Riesgos/Supuestos. "
-                    "Si el contexto aportado no es suficiente, indícalo en lugar de inventar información."
+                    "En preguntas ejecutivas: Resumen → Top 3 prioridades → Acciones → Riesgos/Supuestos."
                 )
             ),
-            input=f"PREGUNTA:\n{question}\n\nHERRAMIENTAS:\n{tool_results}\n\nCONTEXTO RELEVANTE DE SKU:\n{context}",
-            max_output_tokens=1200,
+            input=f"PREGUNTA:\\n{question}\\n\\nHERRAMIENTAS:\\n{tool_results}\\n\\nDATASET:\\n{context}"
         )
         return response.output_text
     except AuthenticationError as exc:
-        return _copilot_fallback_response(question, a, comparison, comparison_meta, raw, "authentication")
-    except RateLimitError as exc:
-        return _copilot_fallback_response(question, a, comparison, comparison_meta, raw, "rate_limit")
-    except APIError as exc:
-        if _is_rate_limit_error(exc):
-            return _copilot_fallback_response(question, a, comparison, comparison_meta, raw, "rate_limit")
         status, code, error_type = _openai_error_info(exc)
-        lang = st.session_state.get("language", "English")
-        if lang == "English":
-            return f"### ⚠️ OpenAI error\nHTTP `{status or 'unknown'}` · code `{code or 'unknown'}` · type `{error_type or 'unknown'}`\n\n{agent_local_response(question, a, comparison, comparison_meta, raw)}"
-        return f"### ⚠️ Error de OpenAI\nHTTP `{status or 'desconocido'}` · code `{code or 'desconocido'}` · type `{error_type or 'desconocido'}`\n\n{agent_local_response(question, a, comparison, comparison_meta, raw)}"
+        return f"### ⚠️ Autenticación OpenAI fallida\\nHTTP `{status or 'desconocido'}` · code `{code or 'desconocido'}` · type `{error_type or 'desconocido'}`"
+    except RateLimitError as exc:
+        status, code, error_type = _openai_error_info(exc)
+        return f"### ⚠️ Cuota/límite OpenAI\\nHTTP `{status or 'desconocido'}` · code `{code or 'desconocido'}` · type `{error_type or 'desconocido'}`"
+    except APIError as exc:
+        status, code, error_type = _openai_error_info(exc)
+        return f"### ⚠️ Error OpenAI\\nHTTP `{status or 'desconocido'}` · code `{code or 'desconocido'}` · type `{error_type or 'desconocido'}`"
     except Exception as exc:
-        if _is_rate_limit_error(exc):
-            return _copilot_fallback_response(question, a, comparison, comparison_meta, raw, "rate_limit")
-        lang = st.session_state.get("language", "English")
-        if lang == "English":
-            return f"### ⚠️ Agent error\n`{type(exc).__name__}: {str(exc)}`\n\n{agent_local_response(question, a, comparison, comparison_meta, raw)}"
-        return f"### ⚠️ Error del agente\n`{type(exc).__name__}: {str(exc)}`\n\n{agent_local_response(question, a, comparison, comparison_meta, raw)}"
+        return f"### ⚠️ Error del agente\\n`{type(exc).__name__}: {str(exc)}`"
+
 
 def export_purchase(a):
     x = a[a["Recommended_Order"] > 0].copy()
@@ -2672,7 +2636,7 @@ _TRANSLATIONS = {
         "Generate reports": "Generar informes",
         "Generating reports...": "Generando informes...",
         "Generate reports to create the HTML and Excel downloads. This avoids heavy report generation on every interaction.": "Genera los informes para crear las descargas HTML y Excel. Esto evita generar informes pesados en cada interacción.",
-        "Decision Intelligence for planners · V2.0.30": "Inteligencia de decisiones para planners · V2.0.30",
+        "Decision Intelligence for planners · V2.0.20": "Inteligencia de decisiones para planners · V2.0.20",
         "Historical demand and inventory": "Histórico de demanda e inventario",
         "Upload historical demand and inventory data for analysis. CSV and Excel are supported.": "Carga datos históricos de demanda e inventario para ejecutar el análisis. Se admiten CSV y Excel.",
         "Safety stock floor (days)": "Stock de seguridad mínimo (días)",
@@ -2954,7 +2918,7 @@ _TRANSLATIONS["Spanish"].update({
     "🔄 Period comparison": "🔄 Comparación de periodos",
     "days": "días",
     "Current": "Actual", "Previous": "Anterior",
-    "From raw supply-chain data to prioritized decisions · V2.0.30": "De datos brutos de supply chain a decisiones priorizadas · V2.0.30",
+    "From raw supply-chain data to prioritized decisions · V2.0.13": "De datos brutos de supply chain a decisiones priorizadas · V2.0.13",
     "🔴 Critical": "🔴 Crítico", "🟠 Review": "🟠 Revisar", "🛒 Purchase need": "🛒 Necesidad de compra",
     "💰 Inventory": "💰 Inventario", "📈 Next month": "📈 Próximo mes",
     "Critical inventory exposure": "Exposición de inventario crítico",
@@ -3029,8 +2993,8 @@ _TRANSLATIONS["Spanish"].update({
     "The MVP forecast uses a weighted average of the last 6 months plus a linear trend. The next iteration can add seasonality, intermittent demand and alternative models.": "El forecast del MVP utiliza una media ponderada de los últimos 6 meses más una tendencia lineal. La siguiente iteración puede añadir estacionalidad, demanda intermitente y modelos alternativos.",
     "HTML and Excel use the current filtered view. HTML includes KPIs and an executive presentation; Excel includes Summary, Action Plan and Supplier Summary with filters.": "HTML y Excel utilizan la vista filtrada actual. HTML incluye KPIs y una presentación ejecutiva; Excel incluye Summary, Action Plan y Supplier Summary con filtros.",
     "Need at least two historical periods to compare evolution.": "Se necesitan al menos dos periodos históricos para comparar la evolución.",
-    "📦 Supply Chain AI Copilot V2.0.30 — recommendations require planner validation before execution.": "📦 Supply Chain AI Copilot V2.0.30 — las recomendaciones requieren validación del planner antes de su ejecución.",
-    "Supply Chain AI Copilot V2.0.30 — recommendations require planner validation before execution.": "Supply Chain AI Copilot V2.0.30 — las recomendaciones requieren validación del planner antes de su ejecución.",
+    "📦 Supply Chain AI Copilot V2.0.20 — recommendations require planner validation before execution.": "📦 Supply Chain AI Copilot V2.0.20 — las recomendaciones requieren validación del planner antes de su ejecución.",
+    "Supply Chain AI Copilot V2.0.20 — recommendations require planner validation before execution.": "Supply Chain AI Copilot V2.0.20 — las recomendaciones requieren validación del planner antes de su ejecución.",
     "Safety stock floor": "Stock de seguridad mínimo", "Service level target": "Objetivo de nivel de servicio",
     "Language": "Idioma", "rows": "filas", "suppliers": "proveedores", "units": "unidades", "Fingerprint": "Huella",
     "Executive": "Ejecutivo", "Action Plan": "Plan de acción", "Data Quality": "Calidad de datos", "Inventory Risk": "Riesgo de inventario",
@@ -3110,23 +3074,10 @@ _COLUMN_TRANSLATIONS_ES = {
 }
 
 def localize_df(df):
-    # Defensive localization: preserve dataframe shape even when tables contain
-    # duplicate/translated column names. Never mutate the caller's dataframe.
-    if df is None or not isinstance(df, pd.DataFrame):
-        return df
-    if st.session_state.get("language", "English") != "Spanish":
+    if st.session_state.get("language", "English") != "Spanish" or df is None:
         return df
     out = df.copy()
-    translated = [_COLUMN_TRANSLATIONS_ES.get(str(c), str(c)) for c in list(out.columns)]
-    # Pandas allows duplicate labels, but some Streamlit/Pandas operations do not.
-    # Make translated display labels unique without changing the canonical data.
-    seen = {}
-    unique = []
-    for label in translated:
-        n = seen.get(label, 0)
-        unique.append(label if n == 0 else f"{label} ({n+1})")
-        seen[label] = n + 1
-    out.columns = unique
+    out.columns = [_COLUMN_TRANSLATIONS_ES.get(str(c), str(c)) for c in out.columns]
     value_maps = {
         "Status": {"🔴 CRITICAL":"🔴 CRÍTICO", "🟠 REVIEW":"🟠 REVISAR", "🟡 EXCESS":"🟡 EXCESO", "🟢 OK":"🟢 OK"},
         "Action": {"BUY_NOW":"COMPRAR AHORA", "CONFIRM_PO":"CONFIRMAR PO", "DO_NOT_BUY":"NO COMPRAR", "REVIEW":"REVISAR", "MONITOR":"MONITORIZAR", "BUY NOW":"COMPRAR", "BUY":"COMPRAR", "CONFIRM OPEN PO":"CONFIRMAR PO", "REVIEW REPLENISHMENT POLICY":"REVISAR POLÍTICA DE REPOSICIÓN", "BLOCK NEW REPLENISHMENT":"BLOQUEAR NUEVA REPOSICIÓN"},
@@ -3151,12 +3102,15 @@ def localize_df(df):
     return out
 
 # Keep calculations in canonical English while presenting tables and common controls in the selected language.
-# Header-filter functionality is intentionally disabled for stability.
-# Native Streamlit dataframes are used directly; no dataframe monkey-patching or
-# custom per-table filter widgets are present in this version.
+_original_st_dataframe = st.dataframe
+def _localized_dataframe(data, *args, **kwargs):
+    return _original_st_dataframe(localize_df(data), *args, **kwargs)
+st.dataframe = _localized_dataframe
 
-
-# Table rendering
+_original_st_metric = st.metric
+def _localized_metric(label, *args, **kwargs):
+    return _original_st_metric(tr(label), *args, **kwargs)
+st.metric = _localized_metric
 
 # -----------------------------
 # User-friendly UI layer
@@ -3188,7 +3142,7 @@ div[data-testid="stExpander"] { border-radius: 12px; }
 # -----------------------------
 with st.sidebar:
     st.markdown("## 📦 Supply Chain AI")
-    st.caption(tr("Decision Intelligence for planners · V2.0.30"))
+    st.caption(tr("Decision Intelligence for planners · V2.0.20"))
 
     language_choice = st.selectbox(f"🌐 {tr('Language')}", ["English", "Español"], index=0 if st.session_state.language == "English" else 1, key="language_selector")
     st.session_state.language = "English" if language_choice == "English" else "Spanish"
@@ -3297,7 +3251,7 @@ def _excel_tab_export_bytes(title, sheets, kpis=None):
         summary = wb.add_worksheet(tr("Summary"))
         summary.hide_gridlines(2)
         summary.write(0, 0, title, title_fmt)
-        summary.write(1, 0, "Exported from Supply Chain AI Copilot V2.0.30", subtitle_fmt)
+        summary.write(1, 0, "Exported from Supply Chain AI Copilot V2.0.20", subtitle_fmt)
         if kpis:
             summary.write(3, 0, "Key metrics", header_fmt)
             for i, (label, value) in enumerate(kpis.items(), start=4):
@@ -3546,7 +3500,7 @@ a["Forecast_Change_Pct"] = np.where(
 # Header
 # -----------------------------
 st.title("📦 Supply Chain AI Copilot")
-st.caption(tr("From raw supply-chain data to prioritized decisions · V2.0.30"))
+st.caption(tr("From raw supply-chain data to prioritized decisions · V2.0.13"))
 
 if not _filter_mask.any():
     st.warning(tr("No SKUs match the selected filters."))
@@ -4852,4 +4806,4 @@ with tabs[13]:
         st.info("Raw CSV exports remain removed from the reporting workflow. HTML and Excel are now the primary shareable outputs.")
 
 st.divider()
-st.caption(tr("Supply Chain AI Copilot V2.0.30 — recommendations require planner validation before execution."))
+st.caption(tr("Supply Chain AI Copilot V2.0.20 — recommendations require planner validation before execution."))
